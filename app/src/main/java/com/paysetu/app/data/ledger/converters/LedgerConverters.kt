@@ -16,4 +16,11 @@ class LedgerConverters {
 
     @TypeConverter
     fun toDirection(value: String) = TransactionDirection.valueOf(value)
+
+    // Added converters for ByteArray to ensure reliable BLOB mapping
+    @TypeConverter
+    fun fromByteArray(value: ByteArray?): ByteArray? = value
+
+    @TypeConverter
+    fun toByteArray(value: ByteArray?): ByteArray? = value
 }

@@ -1,12 +1,17 @@
 package com.paysetu.app.ui.payment
 
-import PaymentViewModel
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -15,12 +20,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SendPaymentScreen(
-    viewModel: PaymentViewModel
+    viewModel: PaymentViewModel,
+    onBack: () -> Unit // Added missing navigation callback
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var amount by remember { mutableStateOf("") }
@@ -29,40 +37,59 @@ fun SendPaymentScreen(
         modifier = Modifier.padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-
         Text("Send Offline Payment", style = MaterialTheme.typography.headlineSmall)
 
         OutlinedTextField(
             value = amount,
             onValueChange = { amount = it },
-            label = { Text("Amount") }
+            label = { Text("Amount") },
+            modifier = Modifier.fillMaxWidth()
         )
 
-        Button(
-            onClick = {
-                viewModel.sendOfflinePayment(
-                    amount = amount.toLong(),
-                    prevTxHash = null // Phase-9 simplification
-                )
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Send Payment")
+            OutlinedButton(
+                onClick = onBack,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Cancel")
+            }
+
+            Button(
+                onClick = {
+                    val amountLong = amount.toLongOrNull() ?: 0L
+                    viewModel.sendOfflinePayment(
+                        amount = amountLong,
+                        prevTxHash = null // Properly handled by validatedPrevHash in ViewModel
+                    )
+                },
+                modifier = Modifier.weight(1f),
+                enabled = uiState !is PaymentUiState.Processing
+            ) {
+                Text("Send")
+            }
         }
 
-        when (uiState) {
+        Spacer(modifier = Modifier.height(16.dp))
+
+        when (val state = uiState) {
             is PaymentUiState.Processing -> {
-                CircularProgressIndicator()
-                Text("Processing offline transaction…")
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Text("Processing offline transaction…")
+                }
             }
 
             is PaymentUiState.Success -> {
-                Text("✅ Payment Accepted")
-                Text("TxHash: ${(uiState as PaymentUiState.Success).txHash}")
+                Text("✅ Payment Accepted", color = MaterialTheme.colorScheme.primary)
+                Text("TxHash: ${state.txHash}", style = MaterialTheme.typography.labelSmall)
             }
 
             is PaymentUiState.Failure -> {
-                Text("❌ Payment Failed")
-                Text((uiState as PaymentUiState.Failure).reason)
+                Text("❌ Payment Failed", color = MaterialTheme.colorScheme.error)
+                Text(state.reason)
             }
 
             else -> {}
