@@ -3,6 +3,9 @@ package com.paysetu.app.ui.ledger
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack // Corrected Import
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,16 +36,29 @@ fun TransactionItem(tx: LedgerTransactionEntity) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "Verified",
+                        tint = Color(0xFF4CAF50),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "VERIFIED",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF4CAF50),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 Text(
-                    text = if (tx.direction == TransactionDirection.INCOMING) "+" else "-",
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "₹${tx.amount}",
+                    text = "${if (tx.direction == TransactionDirection.INCOMING) "+" else "-"} ₹${tx.amount}",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (tx.direction == TransactionDirection.INCOMING) Color(0xFF2E7D32) else Color(0xFFD84315)
                 )
             }
 
@@ -60,29 +76,50 @@ fun TransactionItem(tx: LedgerTransactionEntity) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LedgerScreen(repository: LedgerRepository) {
-    // Collect from the verified stream instead of raw DAO
+fun LedgerScreen(
+    repository: LedgerRepository,
+    onBack: () -> Unit
+) {
     val transactionsResult by repository.getVerifiedTransactions()
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("Verified Ledger") }
+                title = { Text("Verified Ledger", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        // Fixed: Using AutoMirrored to resolve deprecation warning
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Go Back"
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
             )
         }
     ) { padding ->
         if (transactionsResult.isEmpty()) {
             Box(
-                modifier = Modifier.fillMaxSize().padding(padding),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
                 contentAlignment = Alignment.Center
             ) {
-                Text("No verified transactions found.")
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("No verified transactions found.", color = Color.Gray)
+                    Text("Complete a payment to see it here.", style = MaterialTheme.typography.labelSmall)
+                }
             }
         } else {
             LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(bottom = 16.dp)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentPadding = PaddingValues(vertical = 8.dp)
             ) {
                 items(transactionsResult) { tx ->
                     TransactionItem(tx)

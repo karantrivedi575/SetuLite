@@ -1,20 +1,14 @@
 package com.paysetu.app.ui.main
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.paysetu.app.data.ledger.LedgerRepository
 import com.paysetu.app.ui.ledger.LedgerScreen
 import com.paysetu.app.ui.payment.PaymentViewModel
@@ -23,51 +17,175 @@ import com.paysetu.app.ui.payment.SendPaymentScreen
 
 @Composable
 fun MainScreen(
-    viewModel: PaymentViewModel,
-    ledgerRepository: LedgerRepository // Updated from LedgerDao to LedgerRepository
+    paymentViewModel: PaymentViewModel,
+    dashboardViewModel: DashboardViewModel,
+    ledgerRepository: LedgerRepository
 ) {
-    var screen by remember { mutableStateOf("HOME") }
+    // State for navigation within MainScreen
+    var currentScreen by remember { mutableStateOf("HOME") }
 
-    when (screen) {
-        "HOME" -> Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = "PaySetu Lite",
-                style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(bottom = 32.dp)
-            )
+    // Collect UI state from the Dashboard/Security logic
+    val uiState by dashboardViewModel.uiState.collectAsState()
 
-            Button(
-                onClick = { screen = "SEND" },
-                modifier = Modifier.padding(8.dp)
-            ) { Text("Send Payment") }
+    when (currentScreen) {
+        "HOME" -> {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "PaySetu Security Center",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 24.dp, top = 32.dp)
+                )
 
-            Button(
-                onClick = { screen = "RECEIVE" },
-                modifier = Modifier.padding(8.dp)
-            ) { Text("Receive Payment") }
+                // Trust Score Card
+                TrustScoreCard(score = uiState.trustScore)
 
-            Button(
-                onClick = { screen = "LEDGER" },
-                modifier = Modifier.padding(8.dp)
-            ) { Text("View Verified Ledger") }
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Offline Window Card
+                OfflineWindowCard(hoursLeft = uiState.hoursUntilSyncRequired)
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Quick Action Buttons
+                Text(
+                    text = "Quick Actions",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.align(Alignment.Start).padding(bottom = 8.dp)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { currentScreen = "SEND" },
+                        modifier = Modifier.weight(1f),
+                        // Disable sending if trust score is too low
+                        enabled = uiState.trustScore >= 50
+                    ) {
+                        Text("Send")
+                    }
+                    Button(
+                        onClick = { currentScreen = "RECEIVE" },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Receive")
+                    }
+                }
+
+                Button(
+                    onClick = { currentScreen = "LEDGER" },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                ) {
+                    Text("View Verified Ledger")
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Sync Section
+                if (uiState.syncError != null) {
+                    Text(text = uiState.syncError!!, color = MaterialTheme.colorScheme.error)
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                Button(
+                    onClick = { dashboardViewModel.triggerManualSync() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    enabled = !uiState.isSyncing
+                ) {
+                    if (uiState.isSyncing) {
+                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                    } else {
+                        Text("Sync with Network", fontSize = 18.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
         }
 
         "SEND" -> SendPaymentScreen(
-            viewModel = viewModel,
-            onBack = { screen = "HOME" }
+            viewModel = paymentViewModel,
+            onBack = { currentScreen = "HOME" }
         )
 
         "RECEIVE" -> ReceivePaymentScreen(
-            onAccept = { screen = "LEDGER" }, // Navigate to ledger to see the new verified TX
-            onReject = { screen = "HOME" }
+            onAccept = { currentScreen = "LEDGER" },
+            onReject = { currentScreen = "HOME" }
         )
 
         "LEDGER" -> LedgerScreen(
-            repository = ledgerRepository // Passes the repository for chain verification
+            repository = ledgerRepository,
+            onBack = { currentScreen = "HOME" } // Added the callback here
         )
+    }
+}
+
+@Composable
+fun TrustScoreCard(score: Int) {
+    val cardColor = when {
+        score >= 90 -> Color(0xFF4CAF50) // Green
+        score >= 50 -> Color(0xFFFFC107) // Yellow
+        else -> Color(0xFFF44336)        // Red
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = cardColor.copy(alpha = 0.1f))
+    ) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Trust Score", fontSize = 16.sp, color = Color.Gray)
+            Text(
+                text = "$score / 100",
+                fontSize = 48.sp,
+                fontWeight = FontWeight.Black,
+                color = cardColor
+            )
+            if (score < 50) {
+                Text("Warning: Outgoing payments disabled.", color = Color.Red, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun OfflineWindowCard(hoursLeft: Int) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(24.dp)
+                .fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Offline Window", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("Time until sync required", fontSize = 14.sp, color = Color.Gray)
+            }
+            Text(
+                text = "${hoursLeft}h",
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (hoursLeft <= 0) Color.Red else MaterialTheme.colorScheme.primary
+            )
+        }
     }
 }
