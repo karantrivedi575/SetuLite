@@ -24,17 +24,21 @@ class SendPaymentUseCase(
     private val keyProvider: KeyProvider
 ) {
 
-    suspend fun execute(amount: Long): SignedTransaction {
+    /**
+     * Executes an offline payment.
+     * @param amount The value to send.
+     * @param pin The user-provided PIN for authorization.
+     */
+    suspend fun execute(amount: Long, pin: String): SignedTransaction {
         // 1️⃣ Phase 6: Security & Policy Gates
         require(deviceIntegrityChecker.isDeviceTrusted()) { "Device integrity compromised" }
         heartbeatPolicy.enforce()
 
-        // Correcting PinAuthorizer call: It requires a CharArray or no-args depending on implementation
-        // Based on your PinGate.kt, it requires a CharArray. For now, we use a placeholder.
-        val placeholderPin = CharArray(4) // In real UI, this comes from the user
-        require(pinAuthorizer.authorize(placeholderPin)) { "User authentication required" }
+        // ✅ Fixed: Now passes the PIN string to match the PinAuthorizer interface
+        require(pinAuthorizer.authorize(pin)) { "Invalid PIN or authentication required" }
 
         // 2️⃣ Phase 7: Fetch the Correct Previous Hash (The Chain Link)
+        // Resolves 'Unresolved reference getLastTransaction'
         val lastTransaction = ledgerRepository.getLastTransaction()
         val prevHash = lastTransaction?.txHash ?: genesisHashProvider.getGenesisHash()
 
@@ -42,7 +46,7 @@ class SendPaymentUseCase(
         val timestamp = System.currentTimeMillis()
         val senderId = keyProvider.getDevicePublicKey()
 
-        // Using 8 bytes for Longs (Amount + Timestamp)
+        // Ensure buffer is exactly the right size to avoid padding issues in the hash
         val payloadToSign = ByteBuffer.allocate(8 + 8 + prevHash.size + senderId.size)
             .putLong(amount)
             .putLong(timestamp)
@@ -52,7 +56,7 @@ class SendPaymentUseCase(
 
         val txHash = MessageDigest.getInstance("SHA-256").digest(payloadToSign)
 
-        // FIX: Your TransactionSigner.sign() returns ByteArray, ensure the import is correct
+        // 🔐 Sign the SHA-256 hash using the hardware-backed signer
         val signature = signer.sign(txHash)
 
         // 4️⃣ Create the Domain Model for Transport
@@ -65,17 +69,19 @@ class SendPaymentUseCase(
 
         // 5️⃣ Phase 7 & 9: Atomic Persistence
         val entity = LedgerTransactionEntity(
+            id = 0L, // Handled by Room
             txHash = signedTx.txHash,
             prevTxHash = signedTx.prevTxHash,
             senderDeviceId = senderId,
-            receiverDeviceId = ByteArray(0),
+            receiverDeviceId = ByteArray(0), // Placeholder until Bluetooth handshake
             amount = amount,
             timestamp = timestamp,
             signature = signedTx.signature,
             direction = TransactionDirection.OUTGOING,
-            status = TransactionStatus.PENDING
+            status = TransactionStatus.ACCEPTED // Set to ACCEPTED once signed locally
         )
 
+        // DAO performs final chain-integrity and replay checks
         ledgerRepository.appendTransactionAtomically(entity)
 
         return signedTx

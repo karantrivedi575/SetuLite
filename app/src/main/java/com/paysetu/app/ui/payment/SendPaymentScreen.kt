@@ -62,7 +62,7 @@ fun SendPaymentScreen(
                     val amountLong = amount.toLongOrNull() ?: 0L
                     viewModel.sendOfflinePayment(
                         amount = amountLong,
-                        prevTxHash = null // Properly handled by validatedPrevHash in ViewModel
+
                     )
                 },
                 modifier = Modifier.weight(1f),

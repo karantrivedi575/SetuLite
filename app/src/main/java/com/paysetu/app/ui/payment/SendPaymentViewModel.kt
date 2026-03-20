@@ -3,15 +3,44 @@ package com.paysetu.app.ui.payment
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.paysetu.app.domain.usecase.SendPaymentUseCase
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class SendPaymentViewModel(
     private val sendPaymentUseCase: SendPaymentUseCase
 ) : ViewModel() {
 
-    fun sendPayment(amount: Long) {
+    private val _uiState = MutableStateFlow<PaymentUiState>(PaymentUiState.Idle)
+    val uiState: StateFlow<PaymentUiState> = _uiState
+
+    /**
+     * Executes the payment.
+     * @param amount The value to send.
+     * @param pin The PIN captured from the UI input field.
+     */
+    fun sendPayment(amount: Long, pin: String) {
         viewModelScope.launch {
-            sendPaymentUseCase.execute(amount)
+            _uiState.value = PaymentUiState.Processing
+            try {
+                // ✅ Now passing the 'pin' parameter required by SendPaymentUseCase
+                val result = sendPaymentUseCase.execute(amount, pin)
+
+                _uiState.value = PaymentUiState.Success(
+                    txHash = bytesToHex(result.txHash)
+                )
+            } catch (e: Exception) {
+                _uiState.value = PaymentUiState.Failure(
+                    reason = e.message ?: "Unknown error occurred"
+                )
+            }
         }
+    }
+
+    private fun bytesToHex(bytes: ByteArray): String =
+        bytes.joinToString("") { "%02x".format(it) }
+
+    fun resetState() {
+        _uiState.value = PaymentUiState.Idle
     }
 }

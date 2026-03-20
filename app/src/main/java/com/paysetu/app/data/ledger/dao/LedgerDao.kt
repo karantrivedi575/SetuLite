@@ -15,56 +15,66 @@ abstract class LedgerDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     abstract suspend fun insertTransaction(tx: LedgerTransactionEntity)
 
-    @Query("""
-        SELECT * FROM ledger_transactions
-        ORDER BY id DESC
-        LIMIT 1
-    """)
+    /**
+     * Retrieves the absolute latest transaction in the ledger.
+     * Used for linking new transactions to the chain.
+     */
+    @Query("SELECT * FROM ledger_transactions ORDER BY id DESC LIMIT 1")
     abstract suspend fun getLastTransaction(): LedgerTransactionEntity?
 
-    // Updated to use a type-safe parameter instead of hardcoded 'ACCEPTED' string
-    @Query("""
-        SELECT * FROM ledger_transactions
-        WHERE status = :status
-        ORDER BY id ASC
-    """)
-    abstract fun getAcceptedTransactions(
-        status: TransactionStatus = TransactionStatus.ACCEPTED
-    ): Flow<List<LedgerTransactionEntity>>
+    /**
+     * 💡 ADDED: Returns ALL transactions as a Flow (Required by PaymentViewModel).
+     * Ordered by newest first so the UI shows the latest payments at the top.
+     */
+    @Query("SELECT * FROM ledger_transactions ORDER BY timestamp DESC")
+    abstract fun getAllTransactions(): Flow<List<LedgerTransactionEntity>>
 
-    @Query("""
-        SELECT EXISTS(
-            SELECT 1 FROM ledger_transactions
-            WHERE txHash = :txHash
-        )
-    """)
+    /**
+     * Raw query for status filtering. (No default args here to prevent KSP crashes)
+     */
+    @Query("SELECT * FROM ledger_transactions WHERE status = :status ORDER BY timestamp DESC")
+    abstract fun getTransactionsByStatus(status: TransactionStatus): Flow<List<LedgerTransactionEntity>>
+
+    /**
+     * Safe wrapper to get accepted transactions stream.
+     */
+    fun getAcceptedTransactions(): Flow<List<LedgerTransactionEntity>> {
+        return getTransactionsByStatus(TransactionStatus.ACCEPTED)
+    }
+
+    @Query("SELECT EXISTS(SELECT 1 FROM ledger_transactions WHERE txHash = :txHash)")
     abstract suspend fun existsByTxHash(txHash: ByteArray): Boolean
 
-    // 🔐 PHASE-9 ATOMIC LEDGER APPEND
+    /**
+     * 🔐 PHASE-9/10 ATOMIC LEDGER APPEND
+     * Enforces Chain Integrity, Replay Protection, and Genesis Validation.
+     */
     @Transaction
-    open suspend fun appendTransactionAtomically(
-        newTx: LedgerTransactionEntity
-    ) {
-        // 1️⃣ Replay protection
-        require(!existsByTxHash(newTx.txHash)) {
-            "Replay detected: transaction already exists"
+    open suspend fun appendTransactionAtomically(newTx: LedgerTransactionEntity) {
+        // 1. Replay protection: Check if hash already exists
+        if (existsByTxHash(newTx.txHash)) {
+            throw IllegalStateException("Replay detected: txHash ${newTx.txHash.toHex()} already exists")
         }
 
-        // 2️⃣ Chain integrity & Genesis Validation
+        // 2. Chain Integrity & Genesis Validation
         val lastTx = getLastTransaction()
         if (lastTx != null) {
-            require(lastTx.txHash.contentEquals(newTx.prevTxHash)) {
-                "Transaction chain broken: hash mismatch with previous block"
+            // Verify link to previous block
+            if (!lastTx.txHash.contentEquals(newTx.prevTxHash)) {
+                throw IllegalStateException("Chain broken: hash mismatch")
             }
         } else {
-            // Genesis Block Validation: The first transaction in an empty ledger
-            // must point to an empty/zeroed previous hash.
-            require(newTx.prevTxHash.all { it == 0.toByte() }) {
-                "Genesis error: first transaction must have a zeroed prevTxHash"
+            // Genesis: First block must point to a 32-byte zeroed array
+            val isGenesisValid = newTx.prevTxHash.size == 32 && newTx.prevTxHash.all { it == 0.toByte() }
+            if (!isGenesisValid) {
+                throw IllegalStateException("Genesis error: first block must link to 32 zero-bytes")
             }
         }
 
-        // 3️⃣ Atomic insert
+        // 3. Persist
         insertTransaction(newTx)
     }
+
+    // Helper for better error logging
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 }

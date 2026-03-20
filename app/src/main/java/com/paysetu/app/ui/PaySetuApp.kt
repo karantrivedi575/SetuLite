@@ -1,4 +1,4 @@
-package com.paysetu.app
+package com.paysetu.app.ui
 
 import android.app.Application
 import android.util.Log

@@ -6,73 +6,105 @@ import com.paysetu.app.data.ledger.LedgerRepository
 import com.paysetu.app.data.ledger.entity.LedgerTransactionEntity
 import com.paysetu.app.data.ledger.entity.TransactionDirection
 import com.paysetu.app.data.ledger.entity.TransactionStatus
-import com.paysetu.app.domain.security.TransactionSigner // Import the interface
+import com.paysetu.app.domain.security.TransactionSigner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 
+
+
 class PaymentViewModel(
     private val ledgerRepository: LedgerRepository,
-    private val transactionSigner: TransactionSigner // Inject the signer
+    private val transactionSigner: TransactionSigner
 ) : ViewModel() {
 
+    // 1. The State of the Current Transaction Action
     private val _uiState = MutableStateFlow<PaymentUiState>(PaymentUiState.Idle)
     val uiState: StateFlow<PaymentUiState> = _uiState
 
-    fun sendOfflinePayment(
-        amount: Long,
-        prevTxHash: ByteArray?
-    ) {
+    // 2. 💡 NEW: Streaming the Ledger History
+    // This uses stateIn to convert a cold Flow from Room into a hot StateFlow.
+    // It automatically stops fetching when the UI is not visible (SharingStarted.WhileSubscribed).
+    val ledgerHistory: StateFlow<List<LedgerTransactionEntity>> = ledgerRepository
+        .getAllTransactions() // Make sure this returns a Flow<List<LedgerTransactionEntity>> in your Dao
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000), // Cache for 5s after UI hides
+            initialValue = emptyList() // The UI renders immediately with an empty list instead of waiting
+        )
+
+    /**
+     * Sends an offline payment.
+     * Explicitly uses background dispatchers to prevent UI jank during crypto/DB ops.
+     */
+    fun sendOfflinePayment(amount: Long) {
         viewModelScope.launch {
             _uiState.value = PaymentUiState.Processing
 
             try {
-                val timestamp = System.currentTimeMillis()
-                val validatedPrevHash = prevTxHash ?: ByteArray(32) { 0 }
+                // Run heavy logic on background threads
+                val resultHash = withContext(Dispatchers.Default) {
 
-                // 1. Create a template for hashing
-                val txTemplate = LedgerTransactionEntity(
-                    id = 0L,
-                    txHash = ByteArray(0),
-                    prevTxHash = validatedPrevHash,
-                    senderDeviceId = "LOCAL_DEVICE".toByteArray(),
-                    receiverDeviceId = "REMOTE_DEVICE".toByteArray(),
-                    amount = amount,
-                    timestamp = timestamp,
-                    signature = ByteArray(0),
-                    direction = TransactionDirection.OUTGOING,
-                    status = TransactionStatus.ACCEPTED
-                )
+                    // Fetch last transaction (IO bound)
+                    val lastTx = withContext(Dispatchers.IO) {
+                        ledgerRepository.getLastTransaction()
+                    }
 
-                // 2. Calculate the deterministic SHA-256 hash
-                val finalTxHash = calculateTransactionHash(txTemplate)
+                    val validatedPrevHash = lastTx?.txHash ?: ByteArray(32) { 0 }
+                    val timestamp = System.currentTimeMillis()
 
-                // 3. 🔐 NEW: Generate Digital Signature using Hardware Keystore
-                val digitalSignature = transactionSigner.sign(finalTxHash)
+                    val txTemplate = LedgerTransactionEntity(
+                        id = 0L,
+                        txHash = ByteArray(0),
+                        prevTxHash = validatedPrevHash,
+                        senderDeviceId = "LOCAL_DEVICE".toByteArray(),
+                        receiverDeviceId = "REMOTE_DEVICE".toByteArray(),
+                        amount = amount,
+                        timestamp = timestamp,
+                        signature = ByteArray(0),
+                        direction = TransactionDirection.OUTGOING,
+                        status = TransactionStatus.ACCEPTED
+                    )
 
-                // 4. Create the final entity with BOTH Hash and Signature
-                val finalTx = txTemplate.copy(
-                    txHash = finalTxHash,
-                    signature = digitalSignature
-                )
+                    // SHA-256 Hashing (CPU bound)
+                    val finalTxHash = calculateTransactionHash(txTemplate)
 
-                // 5. Append to ledger via repository
-                ledgerRepository.appendTransactionAtomically(finalTx)
+                    // Hardware Signing (Slowest part)
+                    val digitalSignature = transactionSigner.sign(finalTxHash)
 
-                _uiState.value = PaymentUiState.Success(
-                    txHash = bytesToHex(finalTx.txHash)
-                )
+                    val finalTx = txTemplate.copy(
+                        txHash = finalTxHash,
+                        signature = digitalSignature
+                    )
+
+                    // Atomic Append (IO bound)
+                    withContext(Dispatchers.IO) {
+                        ledgerRepository.appendTransactionAtomically(finalTx)
+                    }
+
+                    bytesToHex(finalTx.txHash)
+                }
+
+                _uiState.value = PaymentUiState.Success(resultHash)
 
             } catch (e: Exception) {
                 _uiState.value = PaymentUiState.Failure(
-                    reason = e.message ?: "Transaction failed"
+                    reason = e.message ?: "Offline transaction failed"
                 )
             }
         }
     }
 
+    /**
+     * Internal hashing logic.
+     * Keep private and run on Dispatchers.Default.
+     */
     private fun calculateTransactionHash(tx: LedgerTransactionEntity): ByteArray {
         val digest = MessageDigest.getInstance("SHA-256")
         val buffer = ByteBuffer.allocate(1024)
@@ -86,9 +118,8 @@ class PaymentViewModel(
         return digest.digest(buffer.array().take(buffer.position()).toByteArray())
     }
 
-    private fun bytesToHex(bytes: ByteArray): String {
-        return bytes.joinToString("") { "%02x".format(it) }
-    }
+    private fun bytesToHex(bytes: ByteArray): String =
+        bytes.joinToString("") { "%02x".format(it) }
 
     fun reset() {
         _uiState.value = PaymentUiState.Idle

@@ -14,15 +14,12 @@ import com.paysetu.app.data.ledger.entity.LedgerTransactionEntity
         LedgerTransactionEntity::class,
         DeviceStateEntity::class
     ],
-    version = 1,
+    version = 2, // 1. Incremented from 1 to 2 because the schema changed
     exportSchema = false
 )
 @TypeConverters(LedgerConverters::class)
 abstract class PaySetuDatabase : RoomDatabase() {
 
-    // Access to the immutable transaction ledger
     abstract fun ledgerDao(): LedgerDao
-
-    // Access to device-specific security state (Sync time, Trust score)
     abstract fun deviceStateDao(): DeviceStateDao
 }
