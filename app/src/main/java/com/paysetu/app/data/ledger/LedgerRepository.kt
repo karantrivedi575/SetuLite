@@ -41,13 +41,29 @@ class LedgerRepository(
      * entire chain passes the cryptographic integrity audit.
      */
     fun getVerifiedTransactions(): Flow<List<LedgerTransactionEntity>> {
-        return ledgerDao.getAcceptedTransactions() // Uses the safe wrapper we added to Dao
-            .map { transactions ->
+        return ledgerDao.getAcceptedTransactions()
+            .map { transactions: List<LedgerTransactionEntity> -> // Explicit type added to fix inference error
                 if (transactions.isNotEmpty() && !chainVerifier.verifyChain(transactions)) {
                     throw IllegalStateException("Ledger integrity compromised! Chain verification failed.")
                 }
                 transactions
             }
+    }
+
+    /**
+     * ✅ PHASE 10: Backend Arbiter Override
+     * Updates a transaction status locally based on backend sync results.
+     */
+    suspend fun updateStatus(txHash: ByteArray, newStatus: TransactionStatus) {
+        ledgerDao.updateTransactionStatus(txHash, newStatus)
+    }
+
+    /**
+     * ✅ PHASE 10: Unsynced Data Collection
+     * Fetches all local transactions marked as PENDING to send to the backend.
+     */
+    suspend fun getUnsyncedTransactions(): List<LedgerTransactionEntity> {
+        return ledgerDao.getUnsyncedTransactions()
     }
 
     suspend fun isTransactionSeen(txHash: ByteArray): Boolean {
@@ -59,7 +75,6 @@ class LedgerRepository(
      * Useful for startup health checks.
      */
     suspend fun auditLocalLedger(): Boolean {
-        // We use the raw list to audit
         val transactions = ledgerDao.getAcceptedTransactions().first()
         return chainVerifier.verifyChain(transactions)
     }

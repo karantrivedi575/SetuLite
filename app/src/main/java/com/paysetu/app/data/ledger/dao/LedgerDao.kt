@@ -49,6 +49,20 @@ abstract class LedgerDao {
      * 🔐 PHASE-9/10 ATOMIC LEDGER APPEND
      * Enforces Chain Integrity, Replay Protection, and Genesis Validation.
      */
+    // ... existing insert and append methods ...
+
+    /**
+     * ⚖️ PHASE 10: Backend Arbiter Override
+     * Forces a transaction into a specific state based on global reconciliation.
+     */
+    @Query("UPDATE ledger_transactions SET status = :newStatus WHERE txHash = :hash")
+    abstract suspend fun updateTransactionStatus(hash: ByteArray, newStatus: TransactionStatus)
+
+    /**
+     * Fetches all transactions that are still marked as PENDING (not yet synced).
+     */
+    @Query("SELECT * FROM ledger_transactions WHERE status = 'PENDING' ORDER BY timestamp ASC")
+    abstract suspend fun getUnsyncedTransactions(): List<LedgerTransactionEntity>
     @Transaction
     open suspend fun appendTransactionAtomically(newTx: LedgerTransactionEntity) {
         // 1. Replay protection: Check if hash already exists
@@ -78,3 +92,4 @@ abstract class LedgerDao {
     // Helper for better error logging
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 }
+
