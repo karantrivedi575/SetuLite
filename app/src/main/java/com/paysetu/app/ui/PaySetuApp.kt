@@ -8,6 +8,7 @@ import com.paysetu.app.data.PaySetuDatabase
 import com.paysetu.app.data.device.DeviceStateRepository
 import com.paysetu.app.data.ledger.ChainVerifier
 import com.paysetu.app.data.ledger.LedgerRepository
+import com.paysetu.app.data.ledger.TransactionProcessor // 💡 New Import
 import com.paysetu.app.data.p2p.P2PTransferManager
 import com.paysetu.app.domain.policy.HeartbeatPolicy
 import com.paysetu.app.domain.usecase.PerformGlobalSyncUseCase
@@ -21,20 +22,29 @@ class PaySetuApp : Application() {
     lateinit var keyManager: KeyManager
         private set
 
-    // 2. Database & Repositories (Phase 11)
+    // 2. Shared Utilities
+    // Consolidate ChainVerifier to ensure consistent hashing across the app
+    private val chainVerifier by lazy { ChainVerifier() }
+
+    // 3. Database & Repositories (Phase 11)
     val database by lazy {
         Room.databaseBuilder(this, PaySetuDatabase::class.java, "paysetu-db")
             .fallbackToDestructiveMigration()
             .build()
     }
 
-    val ledgerRepository by lazy { LedgerRepository(database.ledgerDao(), ChainVerifier()) }
+    val ledgerRepository by lazy { LedgerRepository(database.ledgerDao(), chainVerifier) }
     val deviceRepository by lazy { DeviceStateRepository(database.deviceStateDao()) }
 
-    // 3. Phase 12: Offline P2P Bridge
+    // 4. Phase 12 & 13: Offline P2P Bridge & Processing
     val p2pManager by lazy { P2PTransferManager(this) }
 
-    // 4. Use Cases & Factory
+    // 💡 PHASE 13: Incoming Data Handling
+    val transactionProcessor by lazy {
+        TransactionProcessor(database.ledgerDao(), chainVerifier)
+    }
+
+    // 5. Use Cases & Factory
     private val signer by lazy { KeystoreTransactionSigner() }
     private val heartbeatPolicy by lazy { HeartbeatPolicy(deviceRepository) }
 
@@ -52,13 +62,15 @@ class PaySetuApp : Application() {
         )
     }
 
+    // 💡 UPDATED: Factory now accepts the Processor
     val viewModelFactory: ViewModelProvider.Factory by lazy {
         MultiViewModelFactory(
-            ledgerRepository,
-            signer,
-            deviceRepository,
-            performGlobalSyncUseCase,
-            p2pManager // <--- ADD THIS LINE
+            ledgerRepository = ledgerRepository,
+            transactionSigner = signer,
+            deviceStateRepository = deviceRepository,
+            performGlobalSyncUseCase = performGlobalSyncUseCase,
+            p2pManager = p2pManager,
+            transactionProcessor = transactionProcessor // <--- ADD THIS
         )
     }
 

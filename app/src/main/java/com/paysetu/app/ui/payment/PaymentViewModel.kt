@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.paysetu.app.data.ledger.LedgerRepository
+import com.paysetu.app.data.ledger.TransactionProcessor
 import com.paysetu.app.data.ledger.entity.LedgerTransactionEntity
 import com.paysetu.app.data.ledger.entity.TransactionDirection
 import com.paysetu.app.data.ledger.entity.TransactionStatus
@@ -14,7 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update // <-- NEW IMPORT
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
@@ -23,7 +24,8 @@ import java.security.MessageDigest
 class PaymentViewModel(
     private val ledgerRepository: LedgerRepository,
     private val transactionSigner: KeystoreTransactionSigner,
-    private val p2pManager: P2PTransferManager
+    private val p2pManager: P2PTransferManager,
+    private val transactionProcessor: TransactionProcessor
 ) : ViewModel() {
 
     // 1. The State of the Current Transaction Action
@@ -39,22 +41,45 @@ class PaymentViewModel(
             initialValue = emptyList()
         )
 
-    // 3. 💡 NEW: Holds a map of EndpointID -> EndpointName (Device Name)
+    // 3. Holds a map of EndpointID -> EndpointName (Device Name)
     private val _discoveredReceivers = MutableStateFlow<Map<String, String>>(emptyMap())
     val discoveredReceivers: StateFlow<Map<String, String>> = _discoveredReceivers
 
     // ==========================================
-    // 💡 OFFLINE P2P LOGIC (PHASE 12)
+    // 💡 OFFLINE P2P LOGIC (PHASE 12 & 13)
     // ==========================================
 
     /**
      * Called by the "Receive" UI. Opens the device to discovery.
      */
     fun startReceivingOffline(userName: String = "PaySetu User") {
+        // 💡 FIX 2: Kill lingering sender sockets so we don't catch our own broadcast!
+        p2pManager.stopAll()
+
+        // 💡 FIX 3: Wake the UI up from any previous "Success" or "Failure" states
+        reset()
+
         p2pManager.startBroadcasting(userName) { payload ->
-            // When a sender transfers money to us, it arrives here!
             Log.d("PaySetu_P2P", "Received Payload: $payload")
-            // TODO: Parse this JSON, verify the sender's signature, and save to local Ledger
+
+            // THE CATCH AND VERIFY
+            viewModelScope.launch {
+                // Tell the UI we are verifying the math
+                _uiState.value = PaymentUiState.Processing
+
+                // Push to the processor
+                val result = transactionProcessor.processIncomingPayload(payload)
+
+                // Update UI based on outcome
+                result.fold(
+                    onSuccess = { txHashHex ->
+                        _uiState.value = PaymentUiState.Success(txHashHex)
+                    },
+                    onFailure = { error ->
+                        _uiState.value = PaymentUiState.Failure(error.message ?: "Compromised transaction rejected")
+                    }
+                )
+            }
         }
     }
 
@@ -62,10 +87,15 @@ class PaymentViewModel(
      * Called by the "Send" UI. Scans the room for broadcasting receivers.
      */
     fun startScanningForReceivers() {
+        // 💡 FIX 2: Kill lingering receiver sockets so we start a fresh scan
+        p2pManager.stopAll()
+
+        // 💡 FIX 3: Clear the UI state so buttons become clickable again
+        reset()
+
         _discoveredReceivers.value = emptyMap() // Clear old scans
         p2pManager.startDiscovering { endpointId, endpointName ->
             Log.d("PaySetu_P2P", "Found Receiver: $endpointName with ID: $endpointId")
-            // 💡 Update the UI list dynamically!
             _discoveredReceivers.update { currentMap ->
                 currentMap + (endpointId to endpointName)
             }
@@ -77,6 +107,8 @@ class PaymentViewModel(
      */
     fun stopOfflineMode() {
         p2pManager.stopAll()
+        // 💡 Return to Idle when canceling out of a scan/receive screen
+        reset()
     }
 
     /**
@@ -92,7 +124,6 @@ class PaymentViewModel(
     // EXISTING CRYPTO & DB LOGIC
     // ==========================================
 
-    // 💡 UPDATED: Now requires the receiver's endpoint ID!
     fun sendOfflinePayment(amount: Long, receiverEndpointId: String) {
         viewModelScope.launch {
             _uiState.value = PaymentUiState.Processing
@@ -112,7 +143,6 @@ class PaymentViewModel(
                         txHash = ByteArray(0),
                         prevTxHash = validatedPrevHash,
                         senderDeviceId = "LOCAL_DEVICE".toByteArray(),
-                        // 💡 Store the actual receiver ID in the ledger block
                         receiverDeviceId = receiverEndpointId.toByteArray(),
                         amount = amount,
                         timestamp = timestamp,
@@ -133,8 +163,7 @@ class PaymentViewModel(
                         ledgerRepository.appendTransactionAtomically(finalTx)
                     }
 
-                    // 💡 FIRE IT OVER THE AIR!
-                    // Convert the transaction into a string payload and send it
+                    // FIRE IT OVER THE AIR!
                     val payloadData = "TX_PAYLOAD:{hash:${bytesToHex(finalTx.txHash)},amount:$amount}"
                     p2pManager.sendTransaction(receiverEndpointId, payloadData)
 

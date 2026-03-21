@@ -12,6 +12,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.paysetu.app.data.device.DeviceStateRepository
 import com.paysetu.app.data.ledger.LedgerRepository
+import com.paysetu.app.data.ledger.TransactionProcessor
+import com.paysetu.app.data.p2p.P2PTransferManager
 import com.paysetu.app.domain.usecase.PerformGlobalSyncUseCase
 import com.paysetu.app.security.signing.KeystoreTransactionSigner
 import com.paysetu.app.ui.common.PermissionGate
@@ -21,8 +23,7 @@ import com.paysetu.app.ui.payment.PaymentViewModel
 
 class MainActivity : ComponentActivity() {
 
-    // 1. Use the standard Android delegate to get ViewModels from your App Container.
-    // This automatically saves your ViewModels when the screen rotates!
+    // 1. ViewModels injected via the custom factory in PaySetuApp
     private val paymentVM: PaymentViewModel by viewModels {
         (application as PaySetuApp).viewModelFactory
     }
@@ -34,14 +35,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 2. Grab the repository directly from the App class
+        // 2. Grab the repository directly from the App class for the MainScreen
         val repo = (application as PaySetuApp).ledgerRepository
 
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     // 3. Wrap your MainScreen in the PermissionGate
-                    // The UI will only load once the user grants Bluetooth/Location access.
+                    // Ensures Bluetooth/Location radios are ready before P2P starts.
                     PermissionGate {
                         MainScreen(
                             paymentViewModel = paymentVM,
@@ -55,23 +56,42 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Keeping your factory here so it knows how to build the ViewModels
+/**
+ * MultiViewModelFactory handles the creation of all ViewModels in the app.
+ * It acts as the bridge between the Data Layer and the UI Layer.
+ */
 class MultiViewModelFactory(
     private val ledgerRepository: LedgerRepository,
     private val transactionSigner: KeystoreTransactionSigner,
     private val deviceStateRepository: DeviceStateRepository,
     private val performGlobalSyncUseCase: PerformGlobalSyncUseCase,
-    private val p2pManager: com.paysetu.app.data.p2p.P2PTransferManager // <--- ADD THIS PARAMETER
+    private val p2pManager: P2PTransferManager,
+    private val transactionProcessor: TransactionProcessor
 ) : ViewModelProvider.Factory {
+
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return when {
-            modelClass.isAssignableFrom(PaymentViewModel::class.java) ->
-                // Pass it into the PaymentViewModel
-                PaymentViewModel(ledgerRepository, transactionSigner, p2pManager) as T
-            modelClass.isAssignableFrom(DashboardViewModel::class.java) ->
-                DashboardViewModel(deviceStateRepository, performGlobalSyncUseCase) as T
-            else -> throw IllegalArgumentException("Unknown ViewModel class")
+            // Handle PaymentViewModel (Requires Ledger, Signer, P2P Manager, and Processor)
+            modelClass.isAssignableFrom(PaymentViewModel::class.java) -> {
+                PaymentViewModel(
+                    ledgerRepository = ledgerRepository,
+                    transactionSigner = transactionSigner,
+                    p2pManager = p2pManager,
+                    transactionProcessor = transactionProcessor
+                ) as T
+            }
+
+            // Handle DashboardViewModel
+            // 💡 FIXED: Now passes deviceStateRepository correctly
+            modelClass.isAssignableFrom(DashboardViewModel::class.java) -> {
+                DashboardViewModel(
+                    deviceStateRepository = deviceStateRepository,
+                    performGlobalSyncUseCase = performGlobalSyncUseCase
+                ) as T
+            }
+
+            else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }
     }
 }
