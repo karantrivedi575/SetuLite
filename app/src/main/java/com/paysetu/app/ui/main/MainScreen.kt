@@ -28,17 +28,20 @@ fun MainScreen(
     val uiState by dashboardViewModel.uiState.collectAsState()
 
     // ==========================================
-    // 🛰️ PHASE 12: P2P LIFECYCLE MANAGER
+    // 🛰️ PHASE 12 & 14: P2P LIFECYCLE MANAGER
     // This logic starts/stops radios based on navigation
     // ==========================================
     LaunchedEffect(currentScreen) {
         when (currentScreen) {
             "SEND" -> {
-                paymentViewModel.startScanningForReceivers()
+                // For Phase 14, we don't start scanning immediately.
+                // We wait for the user to click a "Scan QR" button in the Send UI.
+                // We keep stopOfflineMode() here just to ensure a clean state.
+                paymentViewModel.stopOfflineMode()
             }
             "RECEIVE" -> {
-                // You can replace "User" with a name from preferences later
-                paymentViewModel.startReceivingOffline(userName = "PaySetu_User")
+                // 💡 PHASE 14: This now generates the unique SETU-XXXXXX QR ID automatically
+                paymentViewModel.startReceivingOffline()
             }
             "HOME", "LEDGER" -> {
                 // Shut down radios when not on a payment screen to save battery
@@ -141,7 +144,6 @@ fun MainScreen(
         )
 
         "RECEIVE" -> ReceivePaymentScreen(
-            // Passing the viewModel here so the Receive screen can show P2P status
             viewModel = paymentViewModel,
             onAccept = { currentScreen = "LEDGER" },
             onReject = { currentScreen = "HOME" }

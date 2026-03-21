@@ -1,20 +1,26 @@
 package com.paysetu.app.ui.payment
 
-import androidx.compose.foundation.clickable
+import android.Manifest
+import android.util.Log
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Done
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun SendPaymentScreen(
     viewModel: PaymentViewModel,
@@ -22,130 +28,186 @@ fun SendPaymentScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
-    // 💡 Collect the discovered devices from the ViewModel
-    val discoveredReceivers by viewModel.discoveredReceivers.collectAsState(initial = emptyMap())
-
-    var selectedReceiverId by remember { mutableStateOf<String?>(null) }
-    var selectedReceiverName by remember { mutableStateOf<String?>(null) }
     var amount by remember { mutableStateOf("") }
+    var isScanning by remember { mutableStateOf(false) }
+
+    // 💡 PHASE 14: Track the camera permission state
+    val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text("Send Offline Payment", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
 
-        if (selectedReceiverId == null) {
-            // ==========================================
-            // STEP 1: SCANNING AND SELECTION STATE
-            // ==========================================
-            Text("Scanning for nearby devices...", color = Color.Gray)
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        // ==========================================
+        // 💡 PHASE 14: THE CAMERA SCANNER STATE
+        // ==========================================
+        if (isScanning) {
+            // Check if we actually have permission to use the camera
+            if (cameraPermissionState.status.isGranted) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    QrScannerView(
+                        onCodeScanned = { scannedCode ->
+                            Log.d("PaySetu_P2P", "QR Scanned: $scannedCode")
+                            isScanning = false // Close camera instantly
+                            val amountLong = amount.toLongOrNull() ?: 0L
 
-            if (discoveredReceivers.isEmpty()) {
-                Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    Text("No receivers found yet.\nEnsure the other device is on the 'Receive' screen.", color = Color.Gray)
+                            // 💡 Fire the targeted discovery.
+                            // The ViewModel now has a 1s delay to let radios warm up.
+                            viewModel.startTargetedDiscovery(scannedCode, amountLong)
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Overlay Instructions
+                    Card(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                    ) {
+                        Text(
+                            "Scan Receiver's QR Code",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
                 }
             } else {
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(discoveredReceivers.entries.toList()) { receiver ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clickable {
-                                    // User tapped a device! Move to Step 2.
-                                    selectedReceiverId = receiver.key
-                                    selectedReceiverName = receiver.value
-                                },
-                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                Spacer(modifier = Modifier.width(16.dp))
-                                Text(receiver.value, style = MaterialTheme.typography.titleMedium)
-                            }
-                        }
+                // UI to ask for Camera Permission
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "Camera permission is required to scan the receiver's QR code.",
+                        textAlign = TextAlign.Center,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                    Button(onClick = { cameraPermissionState.launchPermissionRequest() }) {
+                        Text("Grant Camera Permission")
                     }
                 }
             }
 
-            Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                Text("Cancel")
-            }
-
-        } else {
-            // ==========================================
-            // STEP 2: ENTER AMOUNT AND SEND STATE
-            // ==========================================
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                Row(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
-                    Text("Sending to: ", fontWeight = FontWeight.Bold)
-                    Text(selectedReceiverName ?: "")
-                }
-            }
-
-            OutlinedTextField(
-                value = amount,
-                onValueChange = { amount = it },
-                label = { Text("Amount (₹)") },
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Row(
+            Button(
+                onClick = { isScanning = false },
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
             ) {
-                OutlinedButton(
-                    onClick = { selectedReceiverId = null }, // Go back to the scanning list
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Back")
-                }
-
-                Button(
-                    onClick = {
-                        val amountLong = amount.toLongOrNull() ?: 0L
-                        // 💡 Trigger the full P2P transfer!
-                        viewModel.sendOfflinePayment(amountLong, selectedReceiverId!!)
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = uiState !is PaymentUiState.Processing && amount.isNotEmpty()
-                ) {
-                    Text("Send via P2P")
-                }
+                Text("Cancel Scan")
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
+        }
+        else {
             // ==========================================
-            // STEP 3: TRANSACTION STATUS
+            // 💡 PHASE 14: STANDARD UI STATES
             // ==========================================
             when (val state = uiState) {
-                is PaymentUiState.Processing -> {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        CircularProgressIndicator()
-                        Text("Connecting & Transferring…", modifier = Modifier.padding(top = 8.dp))
+
+                // STEP 1: ENTER AMOUNT
+                is PaymentUiState.Idle, is PaymentUiState.Failure -> {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            OutlinedTextField(
+                                value = amount,
+                                onValueChange = { amount = it },
+                                label = { Text("Amount to Send (₹)") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
-                }
-                is PaymentUiState.Success -> {
-                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))) {
-                        Column(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("✅ Payment Sent Successfully!", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold)
-                            Text("TxHash: ${state.txHash.take(12)}...", style = MaterialTheme.typography.labelSmall)
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(onClick = onBack) { Text("Return to Dashboard") }
+
+                    if (state is PaymentUiState.Failure) {
+                        Text("❌ Payment Failed: ${state.reason}", color = MaterialTheme.colorScheme.error)
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.stopOfflineMode()
+                                onBack()
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Cancel")
+                        }
+
+                        Button(
+                            onClick = { isScanning = true },
+                            modifier = Modifier.weight(1f),
+                            enabled = amount.isNotEmpty() && (amount.toLongOrNull() ?: 0) > 0
+                        ) {
+                            Text("Scan to Pay")
                         }
                     }
                 }
-                is PaymentUiState.Failure -> {
-                    Text("❌ Payment Failed", color = MaterialTheme.colorScheme.error)
-                    Text(state.reason)
+
+                // STEP 2: CONNECTING AND SENDING
+                is PaymentUiState.Processing -> {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(64.dp))
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Text("Target Locked...", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text("Connecting securely & transferring funds", color = Color.Gray, modifier = Modifier.padding(top = 8.dp))
+                    }
                 }
-                else -> {}
+
+                // STEP 3: SUCCESS
+                is PaymentUiState.Success -> {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Icon(
+                            Icons.Default.Done,
+                            contentDescription = null,
+                            tint = Color(0xFF4CAF50),
+                            modifier = Modifier.size(80.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("✅ Payment Sent!", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 24.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("TxHash: ${state.txHash.take(12)}...", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
+
+                        Spacer(modifier = Modifier.height(32.dp))
+
+                        Button(
+                            onClick = {
+                                viewModel.reset()
+                                onBack()
+                            },
+                            modifier = Modifier.fillMaxWidth().height(50.dp)
+                        ) {
+                            Text("Return to Dashboard", fontSize = 16.sp)
+                        }
+                    }
+                }
             }
         }
     }

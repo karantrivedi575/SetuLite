@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.security.MessageDigest
+import java.util.UUID
 
 class PaymentViewModel(
     private val ledgerRepository: LedgerRepository,
@@ -28,11 +29,9 @@ class PaymentViewModel(
     private val transactionProcessor: TransactionProcessor
 ) : ViewModel() {
 
-    // 1. The State of the Current Transaction Action
     private val _uiState = MutableStateFlow<PaymentUiState>(PaymentUiState.Idle)
     val uiState: StateFlow<PaymentUiState> = _uiState
 
-    // 2. Streaming the Ledger History
     val ledgerHistory: StateFlow<List<LedgerTransactionEntity>> = ledgerRepository
         .getAllTransactions()
         .stateIn(
@@ -41,38 +40,33 @@ class PaymentViewModel(
             initialValue = emptyList()
         )
 
-    // 3. Holds a map of EndpointID -> EndpointName (Device Name)
     private val _discoveredReceivers = MutableStateFlow<Map<String, String>>(emptyMap())
     val discoveredReceivers: StateFlow<Map<String, String>> = _discoveredReceivers
 
+    private val _myQrSessionId = MutableStateFlow<String?>(null)
+    val myQrSessionId: StateFlow<String?> = _myQrSessionId
+
     // ==========================================
-    // 💡 OFFLINE P2P LOGIC (PHASE 12 & 13)
+    // 💡 OFFLINE P2P LOGIC (PHASE 14 - FAST SYNC)
     // ==========================================
 
-    /**
-     * Called by the "Receive" UI. Opens the device to discovery.
-     */
     fun startReceivingOffline(userName: String = "PaySetu User") {
-        // 💡 FIX 2: Kill lingering sender sockets so we don't catch our own broadcast!
         p2pManager.stopAll()
-
-        // 💡 FIX 3: Wake the UI up from any previous "Success" or "Failure" states
         reset()
 
-        p2pManager.startBroadcasting(userName) { payload ->
+        val sessionId = "SETU-" + UUID.randomUUID().toString().take(6).uppercase()
+        _myQrSessionId.value = sessionId
+
+        p2pManager.startBroadcasting(sessionId) { payload ->
             Log.d("PaySetu_P2P", "Received Payload: $payload")
 
-            // THE CATCH AND VERIFY
             viewModelScope.launch {
-                // Tell the UI we are verifying the math
                 _uiState.value = PaymentUiState.Processing
-
-                // Push to the processor
                 val result = transactionProcessor.processIncomingPayload(payload)
 
-                // Update UI based on outcome
                 result.fold(
                     onSuccess = { txHashHex ->
+                        // The Receiver shows Success instantly upon processing the payload.
                         _uiState.value = PaymentUiState.Success(txHashHex)
                     },
                     onFailure = { error ->
@@ -83,17 +77,26 @@ class PaymentViewModel(
         }
     }
 
-    /**
-     * Called by the "Send" UI. Scans the room for broadcasting receivers.
-     */
-    fun startScanningForReceivers() {
-        // 💡 FIX 2: Kill lingering receiver sockets so we start a fresh scan
-        p2pManager.stopAll()
+    fun startTargetedDiscovery(scannedQrCode: String, amountToSend: Long) {
+        _uiState.value = PaymentUiState.Processing
 
-        // 💡 FIX 3: Clear the UI state so buttons become clickable again
+        p2pManager.startDiscovering { endpointId, endpointName ->
+            Log.d("PaySetu_P2P", "Found Receiver: $endpointName with ID: $endpointId")
+
+            if (endpointName == scannedQrCode) {
+                // 🚀 FASTEST DISCOVERY: Stop scanning immediately to free up the radio,
+                // then instantly fire the payment.
+                p2pManager.stopDiscovery()
+                sendOfflinePayment(amountToSend, endpointId)
+            }
+        }
+    }
+
+    fun startScanningForReceivers() {
+        p2pManager.stopAll()
         reset()
 
-        _discoveredReceivers.value = emptyMap() // Clear old scans
+        _discoveredReceivers.value = emptyMap()
         p2pManager.startDiscovering { endpointId, endpointName ->
             Log.d("PaySetu_P2P", "Found Receiver: $endpointName with ID: $endpointId")
             _discoveredReceivers.update { currentMap ->
@@ -102,23 +105,16 @@ class PaymentViewModel(
         }
     }
 
-    /**
-     * Kills the Bluetooth radios manually.
-     */
     fun stopOfflineMode() {
         p2pManager.stopAll()
-        // 💡 Return to Idle when canceling out of a scan/receive screen
+        _myQrSessionId.value = null
         reset()
     }
 
-    /**
-     * Automatically kills the Bluetooth radios if the user closes the app or screen.
-     */
     override fun onCleared() {
         super.onCleared()
         p2pManager.stopAll()
     }
-
 
     // ==========================================
     // EXISTING CRYPTO & DB LOGIC
@@ -130,7 +126,6 @@ class PaymentViewModel(
 
             try {
                 val resultHash = withContext(Dispatchers.Default) {
-
                     val lastTx = withContext(Dispatchers.IO) {
                         ledgerRepository.getLastTransaction()
                     }
@@ -162,15 +157,22 @@ class PaymentViewModel(
                     withContext(Dispatchers.IO) {
                         ledgerRepository.appendTransactionAtomically(finalTx)
                     }
-
-                    // FIRE IT OVER THE AIR!
-                    val payloadData = "TX_PAYLOAD:{hash:${bytesToHex(finalTx.txHash)},amount:$amount}"
-                    p2pManager.sendTransaction(receiverEndpointId, payloadData)
-
                     bytesToHex(finalTx.txHash)
                 }
 
-                _uiState.value = PaymentUiState.Success(resultHash)
+                val payloadData = "TX_PAYLOAD:{hash:${resultHash},amount:$amount}"
+
+                // 🚀 NATIVE ACK IMPLEMENTATION
+                // The third parameter is the onDeliveryConfirmed callback.
+                p2pManager.sendTransaction(receiverEndpointId, payloadData) {
+                    Log.d("PaySetu_P2P", "Hardware Delivery Confirmed! Showing Success UI.")
+
+                    // This block executes the EXACT millisecond the hardware guarantees delivery.
+                    // This forces the Sender's UI to sync perfectly with the Receiver's UI.
+                    viewModelScope.launch {
+                        _uiState.value = PaymentUiState.Success(resultHash)
+                    }
+                }
 
             } catch (e: Exception) {
                 _uiState.value = PaymentUiState.Failure(
