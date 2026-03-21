@@ -60,7 +60,7 @@ class KeyManager(private val context: Context) : KeyProvider {
                 ECGenParameterSpec("secp256r1")
             )
             .setDigests(KeyProperties.DIGEST_SHA256)
-            .setUserAuthenticationRequired(true)
+            .setUserAuthenticationRequired(false)
             .setInvalidatedByBiometricEnrollment(true)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

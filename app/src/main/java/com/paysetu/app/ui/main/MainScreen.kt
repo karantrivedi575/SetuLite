@@ -27,6 +27,26 @@ fun MainScreen(
     // Collect UI state from the Dashboard/Security logic
     val uiState by dashboardViewModel.uiState.collectAsState()
 
+    // ==========================================
+    // 🛰️ PHASE 12: P2P LIFECYCLE MANAGER
+    // This logic starts/stops radios based on navigation
+    // ==========================================
+    LaunchedEffect(currentScreen) {
+        when (currentScreen) {
+            "SEND" -> {
+                paymentViewModel.startScanningForReceivers()
+            }
+            "RECEIVE" -> {
+                // You can replace "User" with a name from preferences later
+                paymentViewModel.startReceivingOffline(userName = "PaySetu_User")
+            }
+            "HOME", "LEDGER" -> {
+                // Shut down radios when not on a payment screen to save battery
+                paymentViewModel.stopOfflineMode()
+            }
+        }
+    }
+
     when (currentScreen) {
         "HOME" -> {
             Column(
@@ -42,12 +62,12 @@ fun MainScreen(
                     modifier = Modifier.padding(bottom = 24.dp, top = 32.dp)
                 )
 
-                // Trust Score Card
+                // Trust Score Card (Existing)
                 TrustScoreCard(score = uiState.trustScore)
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Offline Window Card
+                // Offline Window Card (Existing)
                 OfflineWindowCard(hoursLeft = uiState.hoursUntilSyncRequired)
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -66,7 +86,6 @@ fun MainScreen(
                     Button(
                         onClick = { currentScreen = "SEND" },
                         modifier = Modifier.weight(1f),
-                        // Disable sending if trust score is too low
                         enabled = uiState.trustScore >= 50
                     ) {
                         Text("Send")
@@ -92,7 +111,7 @@ fun MainScreen(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Sync Section
+                // Sync Section (Existing)
                 if (uiState.syncError != null) {
                     Text(text = uiState.syncError!!, color = MaterialTheme.colorScheme.error)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -122,16 +141,20 @@ fun MainScreen(
         )
 
         "RECEIVE" -> ReceivePaymentScreen(
+            // Passing the viewModel here so the Receive screen can show P2P status
+            viewModel = paymentViewModel,
             onAccept = { currentScreen = "LEDGER" },
             onReject = { currentScreen = "HOME" }
         )
 
         "LEDGER" -> LedgerScreen(
             repository = ledgerRepository,
-            onBack = { currentScreen = "HOME" } // Added the callback here
+            onBack = { currentScreen = "HOME" }
         )
     }
 }
+
+// --- KEEPING EXISTING SUB-COMPOSABLES EXACTLY AS THEY WERE ---
 
 @Composable
 fun TrustScoreCard(score: Int) {

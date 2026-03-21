@@ -79,4 +79,6 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp(libs.androidx.room.compiler)
+    implementation("com.google.android.gms:play-services-nearby:19.0.0")
+    implementation("com.google.accompanist:accompanist-permissions:0.34.0")
 }
