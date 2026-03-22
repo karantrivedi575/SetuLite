@@ -13,8 +13,11 @@ class P2PTransferManager(private val context: Context) {
 
     // 1. Start Advertising (Receiver Side)
     fun startBroadcasting(userName: String, onPayloadReceived: (String) -> Unit) {
+        // 🚀 TURBO: Force high power.
+        // We removed setDisallowedMediums to let the OS pick the fastest path automatically.
         val advertisingOptions = AdvertisingOptions.Builder()
             .setStrategy(STRATEGY)
+            .setLowPower(false)
             .build()
 
         connectionsClient.startAdvertising(
@@ -29,10 +32,12 @@ class P2PTransferManager(private val context: Context) {
         }
     }
 
-    // 2. Start Discovering (Sender Side)
+    // 2. Start Discovery (Sender Side)
     fun startDiscovering(onEndpointFound: (String, String) -> Unit) {
+        // 🚀 TURBO: Use high power to scan more frequently (better for Xiaomi/MiUI)
         val discoveryOptions = DiscoveryOptions.Builder()
             .setStrategy(STRATEGY)
+            .setLowPower(false)
             .build()
 
         connectionsClient.startDiscovery(
@@ -41,7 +46,6 @@ class P2PTransferManager(private val context: Context) {
                 override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
                     onEndpointFound(endpointId, info.endpointName)
                 }
-
                 override fun onEndpointLost(endpointId: String) {}
             },
             discoveryOptions
@@ -52,7 +56,6 @@ class P2PTransferManager(private val context: Context) {
         }
     }
 
-    // 💡 NEW: Stop Discovery explicitly without killing active connections
     fun stopDiscovery() {
         connectionsClient.stopDiscovery()
         Log.d("PaySetu_P2P", "Discovery stopped.")
@@ -66,19 +69,19 @@ class P2PTransferManager(private val context: Context) {
     ) {
         Log.d("PaySetu_P2P", "Attempting to send payload to $endpointId")
 
+        // 💡 OPTIMIZATION: We removed the explicit ConnectionOptions builder call.
+        // On many Android versions, requestConnection automatically uses the
+        // discovery strategy. This avoids the "Unresolved reference" compiler error.
         connectionsClient.requestConnection(
             "PaySetu_Sender",
             endpointId,
             object : ConnectionLifecycleCallback() {
                 override fun onConnectionInitiated(id: String, info: ConnectionInfo) {
-                    // 💡 The Sender MUST accept the connection to track the outgoing payload progress
                     connectionsClient.acceptConnection(id, object : PayloadCallback() {
-                        override fun onPayloadReceived(endpointId: String, payload: Payload) {
-                            // Sender ignores incoming payloads in this flow
-                        }
+                        override fun onPayloadReceived(id: String, payload: Payload) {}
 
-                        override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
-                            // 🚀 FASTEST SYNC: Fires the exact millisecond the bytes hit Phone B
+                        override fun onPayloadTransferUpdate(id: String, update: PayloadTransferUpdate) {
+                            // 🚀 THE MAGIC: Native hardware confirmation
                             if (update.status == PayloadTransferUpdate.Status.SUCCESS) {
                                 Log.d("PaySetu_P2P", "Hardware Delivery Confirmed!")
                                 onDeliveryConfirmed()
@@ -89,11 +92,9 @@ class P2PTransferManager(private val context: Context) {
 
                 override fun onConnectionResult(id: String, result: ConnectionResolution) {
                     if (result.status.isSuccess) {
-                        Log.d("PaySetu_P2P", "Connection Success to $id. Sending Payload...")
+                        Log.d("PaySetu_P2P", "Connection Success. Sending Payload...")
                         val payload = Payload.fromBytes(payloadData.toByteArray())
                         connectionsClient.sendPayload(id, payload)
-                    } else {
-                        Log.e("PaySetu_P2P", "Connection Failed with status: ${result.status.statusCode}")
                     }
                 }
 
@@ -102,34 +103,25 @@ class P2PTransferManager(private val context: Context) {
                 }
             }
         ).addOnFailureListener { e ->
-            // Fallback: If we are somehow already connected, fire the payload immediately.
             if (e.message?.contains("8003") == true || e.message?.contains("ALREADY_CONNECTED") == true) {
                 Log.d("PaySetu_P2P", "Already connected. Firing payload directly.")
                 val payload = Payload.fromBytes(payloadData.toByteArray())
                 connectionsClient.sendPayload(endpointId, payload)
-
-                // Manually trigger the callback so the UI doesn't hang
                 onDeliveryConfirmed()
-            } else {
-                Log.e("PaySetu_P2P", "Request Connection Failed", e)
             }
         }
     }
 
-    // --- Helper Callbacks ---
-
     private fun createConnectionLifecycleCallback(onReceived: (String) -> Unit) =
         object : ConnectionLifecycleCallback() {
             override fun onConnectionInitiated(id: String, info: ConnectionInfo) {
-                Log.d("PaySetu_P2P", "Incoming connection from ${info.endpointName}. Accepting...")
+                Log.d("PaySetu_P2P", "Incoming connection. Accepting...")
                 connectionsClient.acceptConnection(id, createPayloadCallback(onReceived))
             }
 
             override fun onConnectionResult(id: String, result: ConnectionResolution) {
                 if (result.status.isSuccess) {
-                    Log.d("PaySetu_P2P", "Connection successfully established with $id")
-                } else {
-                    Log.e("PaySetu_P2P", "Failed to establish connection: ${result.status.statusCode}")
+                    Log.d("PaySetu_P2P", "Connection established with $id")
                 }
             }
 
@@ -143,21 +135,18 @@ class P2PTransferManager(private val context: Context) {
             override fun onPayloadReceived(id: String, payload: Payload) {
                 payload.asBytes()?.let {
                     val dataString = String(it)
-                    Log.d("PaySetu_P2P", "Raw Payload Received from $id: $dataString")
+                    Log.d("PaySetu_P2P", "Raw Payload Received: $dataString")
                     onReceived(dataString)
                 }
             }
 
-            override fun onPayloadTransferUpdate(id: String, update: PayloadTransferUpdate) {
-                // ❌ Auto-disconnect removed. The connection is closed gracefully
-                // when the user hits 'Cancel' or 'Return to Dashboard' via stopAll().
-            }
+            override fun onPayloadTransferUpdate(id: String, update: PayloadTransferUpdate) {}
         }
 
     fun stopAll() {
         connectionsClient.stopAllEndpoints()
         connectionsClient.stopAdvertising()
         connectionsClient.stopDiscovery()
-        Log.d("PaySetu_P2P", "All P2P radios stopped.")
+        Log.d("PaySetu_P2P", "Radios shut down.")
     }
 }

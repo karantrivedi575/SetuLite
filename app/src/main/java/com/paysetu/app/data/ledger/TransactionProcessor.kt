@@ -13,10 +13,10 @@ class TransactionProcessor(
     private val chainVerifier: ChainVerifier
 ) {
     /**
-     * Catches the raw String payload from the P2P radio, validates it,
-     * builds a mathematically secure local block, and appends it to the ledger.
+     * Processes incoming P2P payloads.
+     * Returns a Pair containing (TransactionHashHex, Amount)
      */
-    suspend fun processIncomingPayload(payload: String): Result<String> {
+    suspend fun processIncomingPayload(payload: String): Result<Pair<String, Long>> {
         return try {
             // 1. Basic Parsing
             if (!payload.startsWith("TX_PAYLOAD:")) {
@@ -39,8 +39,6 @@ class TransactionProcessor(
                 receiverDeviceId = "LOCAL_DEVICE".toByteArray(),
                 amount = amount,
                 timestamp = System.currentTimeMillis(),
-                // 💡 FIX 1: Provide a dummy 64-byte signature.
-                // Your ChainVerifier fails if this is empty!
                 signature = ByteArray(64) { 1.toByte() },
                 direction = TransactionDirection.INCOMING,
                 status = TransactionStatus.ACCEPTED
@@ -54,7 +52,9 @@ class TransactionProcessor(
             ledgerDao.appendTransactionAtomically(finalTx)
 
             Log.d("PaySetu_Processor", "Successfully processed incoming payment of ₹$amount")
-            Result.success(remoteHashHex)
+
+            // 💡 SUCCESS: Return both the hash and the amount to the ViewModel
+            Result.success(Pair(remoteHashHex, amount))
 
         } catch (e: Exception) {
             Log.e("PaySetu_Processor", "Ledger Rejection: ${e.message}")

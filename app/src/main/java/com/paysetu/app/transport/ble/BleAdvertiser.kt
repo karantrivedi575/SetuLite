@@ -15,6 +15,7 @@ class BleAdvertiser(
     private val serviceUuid: UUID
 ) {
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     fun startAdvertising(sessionHint: ByteArray, callback: AdvertiseCallback) {
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)

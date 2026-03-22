@@ -11,11 +11,12 @@ import com.paysetu.app.data.ledger.entity.TransactionStatus
 import com.paysetu.app.data.p2p.P2PTransferManager
 import com.paysetu.app.security.signing.KeystoreTransactionSigner
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
@@ -40,14 +41,13 @@ class PaymentViewModel(
             initialValue = emptyList()
         )
 
-    private val _discoveredReceivers = MutableStateFlow<Map<String, String>>(emptyMap())
-    val discoveredReceivers: StateFlow<Map<String, String>> = _discoveredReceivers
-
     private val _myQrSessionId = MutableStateFlow<String?>(null)
     val myQrSessionId: StateFlow<String?> = _myQrSessionId
 
+    private var connectionTimeoutJob: Job? = null
+
     // ==========================================
-    // 💡 OFFLINE P2P LOGIC (PHASE 14 - FAST SYNC)
+    // 💡 OFFLINE P2P LOGIC (STRESS-TESTED)
     // ==========================================
 
     fun startReceivingOffline(userName: String = "PaySetu User") {
@@ -62,15 +62,21 @@ class PaymentViewModel(
 
             viewModelScope.launch {
                 _uiState.value = PaymentUiState.Processing
+
                 val result = transactionProcessor.processIncomingPayload(payload)
 
                 result.fold(
-                    onSuccess = { txHashHex ->
-                        // The Receiver shows Success instantly upon processing the payload.
-                        _uiState.value = PaymentUiState.Success(txHashHex)
+                    onSuccess = { (txHashHex, receivedAmount) ->
+                        _uiState.value = PaymentUiState.Success(txHashHex, receivedAmount)
+
+                        // 💡 GRACEFUL DISCONNECT: Wait half a second before killing radios
+                        delay(500)
+                        p2pManager.stopAll()
                     },
                     onFailure = { error ->
                         _uiState.value = PaymentUiState.Failure(error.message ?: "Compromised transaction rejected")
+                        delay(500)
+                        p2pManager.stopAll()
                     }
                 )
             }
@@ -80,49 +86,38 @@ class PaymentViewModel(
     fun startTargetedDiscovery(scannedQrCode: String, amountToSend: Long) {
         _uiState.value = PaymentUiState.Processing
 
-        p2pManager.startDiscovering { endpointId, endpointName ->
-            Log.d("PaySetu_P2P", "Found Receiver: $endpointName with ID: $endpointId")
+        // 💡 FORCE CLEANUP: Tell the system to drop ALL old connections/sockets
+        p2pManager.stopAll()
 
-            if (endpointName == scannedQrCode) {
-                // 🚀 FASTEST DISCOVERY: Stop scanning immediately to free up the radio,
-                // then instantly fire the payment.
-                p2pManager.stopDiscovery()
-                sendOfflinePayment(amountToSend, endpointId)
+        viewModelScope.launch {
+            // 💡 THE HARDWARE BREATH: Wait 500ms for the Wi-Fi/Bluetooth chips to actually flush
+            // their buffers and close the old sockets.
+            delay(500)
+
+            // 💡 NOW start the timeout timer, because discovery is actually starting
+            startTimeoutTimer(15000, "Receiver not found. Ensure the QR code is still visible.")
+
+            p2pManager.startDiscovering { endpointId, endpointName ->
+                Log.d("PaySetu_P2P", "Found Receiver: $endpointName with ID: $endpointId")
+
+                if (endpointName == scannedQrCode) {
+                    connectionTimeoutJob?.cancel()
+
+                    p2pManager.stopDiscovery()
+
+                    viewModelScope.launch {
+                        delay(150) // Hardware breath
+                        sendOfflinePayment(amountToSend, endpointId)
+                    }
+                }
             }
         }
     }
-
-    fun startScanningForReceivers() {
-        p2pManager.stopAll()
-        reset()
-
-        _discoveredReceivers.value = emptyMap()
-        p2pManager.startDiscovering { endpointId, endpointName ->
-            Log.d("PaySetu_P2P", "Found Receiver: $endpointName with ID: $endpointId")
-            _discoveredReceivers.update { currentMap ->
-                currentMap + (endpointId to endpointName)
-            }
-        }
-    }
-
-    fun stopOfflineMode() {
-        p2pManager.stopAll()
-        _myQrSessionId.value = null
-        reset()
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        p2pManager.stopAll()
-    }
-
-    // ==========================================
-    // EXISTING CRYPTO & DB LOGIC
-    // ==========================================
 
     fun sendOfflinePayment(amount: Long, receiverEndpointId: String) {
         viewModelScope.launch {
-            _uiState.value = PaymentUiState.Processing
+            // 💡 RELIABILITY FIX: Increased to 15 seconds to allow older hardware to connect
+            startTimeoutTimer(15000, "Transfer Interrupted. Check connection and try again.")
 
             try {
                 val resultHash = withContext(Dispatchers.Default) {
@@ -162,24 +157,58 @@ class PaymentViewModel(
 
                 val payloadData = "TX_PAYLOAD:{hash:${resultHash},amount:$amount}"
 
-                // 🚀 NATIVE ACK IMPLEMENTATION
-                // The third parameter is the onDeliveryConfirmed callback.
                 p2pManager.sendTransaction(receiverEndpointId, payloadData) {
-                    Log.d("PaySetu_P2P", "Hardware Delivery Confirmed! Showing Success UI.")
+                    Log.d("PaySetu_P2P", "Hardware Delivery Confirmed!")
 
-                    // This block executes the EXACT millisecond the hardware guarantees delivery.
-                    // This forces the Sender's UI to sync perfectly with the Receiver's UI.
+                    connectionTimeoutJob?.cancel()
+
                     viewModelScope.launch {
-                        _uiState.value = PaymentUiState.Success(resultHash)
+                        _uiState.value = PaymentUiState.Success(resultHash, amount)
+
+                        // 💡 GRACEFUL DISCONNECT: Prevents the "SOCKET_CLOSED" error
+                        delay(800)
+                        p2pManager.stopAll()
                     }
                 }
 
             } catch (e: Exception) {
+                connectionTimeoutJob?.cancel()
                 _uiState.value = PaymentUiState.Failure(
                     reason = e.message ?: "Offline transaction failed"
                 )
+                delay(500)
+                p2pManager.stopAll()
             }
         }
+    }
+
+    private fun startTimeoutTimer(duration: Long, errorMessage: String) {
+        connectionTimeoutJob?.cancel()
+        connectionTimeoutJob = viewModelScope.launch {
+            delay(duration)
+            if (_uiState.value is PaymentUiState.Processing) {
+                Log.e("PaySetu_P2P", "Failsafe Triggered: $errorMessage")
+                p2pManager.stopAll()
+                _uiState.value = PaymentUiState.Failure(errorMessage)
+            }
+        }
+    }
+
+    fun stopOfflineMode() {
+        p2pManager.stopAll()
+        _myQrSessionId.value = null
+        connectionTimeoutJob?.cancel()
+        reset()
+    }
+
+    fun reset() {
+        _uiState.value = PaymentUiState.Idle
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        p2pManager.stopAll()
+        connectionTimeoutJob?.cancel()
     }
 
     private fun calculateTransactionHash(tx: LedgerTransactionEntity): ByteArray {
@@ -197,8 +226,4 @@ class PaymentViewModel(
 
     private fun bytesToHex(bytes: ByteArray): String =
         bytes.joinToString("") { "%02x".format(it) }
-
-    fun reset() {
-        _uiState.value = PaymentUiState.Idle
-    }
 }

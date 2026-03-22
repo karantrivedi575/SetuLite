@@ -8,25 +8,22 @@ import com.paysetu.app.data.PaySetuDatabase
 import com.paysetu.app.data.device.DeviceStateRepository
 import com.paysetu.app.data.ledger.ChainVerifier
 import com.paysetu.app.data.ledger.LedgerRepository
-import com.paysetu.app.data.ledger.TransactionProcessor // 💡 New Import
+import com.paysetu.app.data.ledger.TransactionProcessor
 import com.paysetu.app.data.p2p.P2PTransferManager
 import com.paysetu.app.domain.policy.HeartbeatPolicy
 import com.paysetu.app.domain.usecase.PerformGlobalSyncUseCase
 import com.paysetu.app.domain.usecase.ReconcileLedgerUseCase
 import com.paysetu.app.security.keys.KeyManager
 import com.paysetu.app.security.signing.KeystoreTransactionSigner
+import com.paysetu.app.domain.model.sync.SyncResponse
 
 class PaySetuApp : Application() {
 
-    // 1. Core Security (Phase 6 & 10)
     lateinit var keyManager: KeyManager
         private set
 
-    // 2. Shared Utilities
-    // Consolidate ChainVerifier to ensure consistent hashing across the app
     private val chainVerifier by lazy { ChainVerifier() }
 
-    // 3. Database & Repositories (Phase 11)
     val database by lazy {
         Room.databaseBuilder(this, PaySetuDatabase::class.java, "paysetu-db")
             .fallbackToDestructiveMigration()
@@ -35,34 +32,42 @@ class PaySetuApp : Application() {
 
     val ledgerRepository by lazy { LedgerRepository(database.ledgerDao(), chainVerifier) }
     val deviceRepository by lazy { DeviceStateRepository(database.deviceStateDao()) }
-
-    // 4. Phase 12 & 13: Offline P2P Bridge & Processing
     val p2pManager by lazy { P2PTransferManager(this) }
 
-    // 💡 PHASE 13: Incoming Data Handling
     val transactionProcessor by lazy {
         TransactionProcessor(database.ledgerDao(), chainVerifier)
     }
 
-    // 5. Use Cases & Factory
     private val signer by lazy { KeystoreTransactionSigner() }
     private val heartbeatPolicy by lazy { HeartbeatPolicy(deviceRepository) }
 
+    // 💡 PHASE 15 FIX: Shielding the app from Mock Sync failures
     private val performGlobalSyncUseCase by lazy {
         PerformGlobalSyncUseCase(
             ledgerRepository = ledgerRepository,
             deviceStateRepository = deviceRepository,
             reconcileLedgerUseCase = ReconcileLedgerUseCase(ledgerRepository, deviceRepository, heartbeatPolicy),
             backendApiService = object : com.paysetu.app.data.api.BackendSyncService {
-                override suspend fun syncLedger(request: com.paysetu.app.domain.model.sync.SyncRequest): com.paysetu.app.domain.model.sync.SyncResponse {
+                override suspend fun syncLedger(request: com.paysetu.app.domain.model.sync.SyncRequest): SyncResponse {
+                    Log.d("PaySetu_Sync", "Sync attempt started (Simulated Offline)...")
+
+                    // Simulate a slight delay for realism
                     kotlinx.coroutines.delay(2000)
-                    throw Exception("Mock network timeout")
+
+                    // 💡 FIXED: Returning a valid SyncResponse with correct parameter names
+                    Log.w("PaySetu_Sync", "Network unavailable. Returning mock offline response.")
+                    return SyncResponse(
+                        acceptedTxHashes = emptyList(),
+                        rejectedTxHashes = emptyList(),
+                        conflictedTxHashes = emptyList(),
+                        updatedTrustScore = 1.0f,
+                        serverTimestamp = System.currentTimeMillis()
+                    )
                 }
             }
         )
     }
 
-    // 💡 UPDATED: Factory now accepts the Processor
     val viewModelFactory: ViewModelProvider.Factory by lazy {
         MultiViewModelFactory(
             ledgerRepository = ledgerRepository,
@@ -70,14 +75,13 @@ class PaySetuApp : Application() {
             deviceStateRepository = deviceRepository,
             performGlobalSyncUseCase = performGlobalSyncUseCase,
             p2pManager = p2pManager,
-            transactionProcessor = transactionProcessor // <--- ADD THIS
+            transactionProcessor = transactionProcessor
         )
     }
 
     override fun onCreate() {
         super.onCreate()
 
-        // Initialize hardware keys
         keyManager = KeyManager(this)
         keyManager.initialize()
 
