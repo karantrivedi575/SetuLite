@@ -2,10 +2,19 @@ package com.paysetu.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+// 🌌 Deep Base (The Foundation)
+val MidnightBlue = Color(0xFF0F172A) // Rich slate for card backgrounds
+val DeepNavy = Color(0xFF020617)     // Deepest navy for root backgrounds
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+// 💹 Primary Financial Accent
+val EmeraldGreen = Color(0xFF10B981) // The single "Hero" color for the app
+val RoseError = Color(0xFFF43F5E)    // Modern soft red for errors/outgoing
+
+// ⚪ Typography & Muted Elements
+val SlateBlue = Color(0xFF94A3B8)    // 💎 Elite muted text (labels/REF IDs)
+val TextPrimary = Color(0xFFF8FAFC)  // Crisp, near-white for high readability
+val SoftWhite = Color.White.copy(alpha = 0.8f) // Muted primary text
+
+// 💎 Functional Glass Alphas (Standardized)
+val GlassBackground = Color.White.copy(alpha = 0.05f)
+val GlassBorder = Color.White.copy(alpha = 0.12f)

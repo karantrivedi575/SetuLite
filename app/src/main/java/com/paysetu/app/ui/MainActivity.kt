@@ -1,15 +1,18 @@
 package com.paysetu.app.ui
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.paysetu.app.ui.PaySetuApp
 import com.paysetu.app.data.device.DeviceStateRepository
 import com.paysetu.app.data.ledger.LedgerRepository
 import com.paysetu.app.data.ledger.TransactionProcessor
@@ -20,10 +23,10 @@ import com.paysetu.app.ui.common.PermissionGate
 import com.paysetu.app.ui.main.DashboardViewModel
 import com.paysetu.app.ui.main.MainScreen
 import com.paysetu.app.ui.payment.PaymentViewModel
+import com.paysetu.app.ui.theme.PaySetuTheme
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
-    // 1. ViewModels injected via the custom factory in PaySetuApp
     private val paymentVM: PaymentViewModel by viewModels {
         (application as PaySetuApp).viewModelFactory
     }
@@ -35,14 +38,21 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 2. Grab the repository directly from the App class for the MainScreen
+        // 💡 FORCING THE "INFINITE OLED" LOOK
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
+
         val repo = (application as PaySetuApp).ledgerRepository
 
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    // 3. Wrap your MainScreen in the PermissionGate
-                    // Ensures Bluetooth/Location radios are ready before P2P starts.
+            PaySetuTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = Color(0xFF0F172A)
+                ) {
+                    // 🛡️ THE FIX: PermissionGate no longer takes parameters!
                     PermissionGate {
                         MainScreen(
                             paymentViewModel = paymentVM,
@@ -57,8 +67,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * MultiViewModelFactory handles the creation of all ViewModels in the app.
- * It acts as the bridge between the Data Layer and the UI Layer.
+ * 💡 MultiViewModelFactory: Injects hardware modules into the UI Layer.
  */
 class MultiViewModelFactory(
     private val ledgerRepository: LedgerRepository,
@@ -72,7 +81,6 @@ class MultiViewModelFactory(
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return when {
-            // Handle PaymentViewModel (Requires Ledger, Signer, P2P Manager, and Processor)
             modelClass.isAssignableFrom(PaymentViewModel::class.java) -> {
                 PaymentViewModel(
                     ledgerRepository = ledgerRepository,
@@ -82,8 +90,6 @@ class MultiViewModelFactory(
                 ) as T
             }
 
-            // Handle DashboardViewModel
-            // 💡 FIXED: Now passes deviceStateRepository correctly
             modelClass.isAssignableFrom(DashboardViewModel::class.java) -> {
                 DashboardViewModel(
                     deviceStateRepository = deviceStateRepository,

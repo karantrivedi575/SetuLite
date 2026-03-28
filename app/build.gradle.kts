@@ -89,4 +89,6 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.3.1")
     implementation("androidx.camera:camera-lifecycle:1.3.1")
     implementation("androidx.camera:camera-view:1.3.1")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.biometric:biometric:1.2.0-alpha05")
 }
