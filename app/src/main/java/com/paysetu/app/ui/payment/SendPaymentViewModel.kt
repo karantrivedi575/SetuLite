@@ -26,8 +26,10 @@ class SendPaymentViewModel(
                 // ✅ Now passing the 'pin' parameter required by SendPaymentUseCase
                 val result = sendPaymentUseCase.execute(amount, pin)
 
+                // 🛡️ Update line 30 to this:
                 _uiState.value = PaymentUiState.Success(
-                    txHash = bytesToHex(result.txHash)
+                    txHash = bytesToHex(result.txHash),
+                    amount = amount // 👈 Hand over the amount here
                 )
             } catch (e: Exception) {
                 _uiState.value = PaymentUiState.Failure(

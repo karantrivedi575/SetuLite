@@ -348,6 +348,8 @@ fun ReceivePaymentScreen(
                             Text("Try Again", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
                     }
+
+                    else -> {}
                 }
             }
         }
