@@ -1,6 +1,8 @@
 package com.paysetu.app.data.p2p
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
@@ -9,15 +11,17 @@ class P2PTransferManager(private val context: Context) {
 
     private val connectionsClient = Nearby.getConnectionsClient(context)
     private val serviceId = "com.paysetu.app.OFFLINE_PAYMENT"
-    private val STRATEGY = Strategy.P2P_POINT_TO_POINT
 
-    // 1. Start Advertising (Receiver Side)
+    // Using P2P_STAR ensures better compatibility across different Android versions
+    // and prevents the Wi-Fi Direct socket lockup seen in P2P_POINT_TO_POINT on Xiaomi devices.
+    private val STRATEGY = Strategy.P2P_STAR
+
     fun startBroadcasting(userName: String, onPayloadReceived: (String) -> Unit) {
-        // 🚀 TURBO: Force high power.
-        // We removed setDisallowedMediums to let the OS pick the fastest path automatically.
+        // 🛡️ Always clean state before starting
+        stopAll()
+
         val advertisingOptions = AdvertisingOptions.Builder()
             .setStrategy(STRATEGY)
-            .setLowPower(false)
             .build()
 
         connectionsClient.startAdvertising(
@@ -32,18 +36,19 @@ class P2PTransferManager(private val context: Context) {
         }
     }
 
-    // 2. Start Discovery (Sender Side)
     fun startDiscovering(onEndpointFound: (String, String) -> Unit) {
-        // 🚀 TURBO: Use high power to scan more frequently (better for Xiaomi/MiUI)
+        // 🛡️ Always clean state before starting
+        stopAll()
+
         val discoveryOptions = DiscoveryOptions.Builder()
             .setStrategy(STRATEGY)
-            .setLowPower(false)
             .build()
 
         connectionsClient.startDiscovery(
             serviceId,
             object : EndpointDiscoveryCallback() {
                 override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
+                    Log.d("PaySetu_P2P", "Found Receiver: ${info.endpointName}")
                     onEndpointFound(endpointId, info.endpointName)
                 }
                 override fun onEndpointLost(endpointId: String) {}
@@ -61,17 +66,14 @@ class P2PTransferManager(private val context: Context) {
         Log.d("PaySetu_P2P", "Discovery stopped.")
     }
 
-    // 3. Connect & Send Payload (Sender Side)
     fun sendTransaction(
         endpointId: String,
         payloadData: String,
-        onDeliveryConfirmed: () -> Unit
+        onDeliveryConfirmed: () -> Unit,
+        onFailure: (String) -> Unit
     ) {
-        Log.d("PaySetu_P2P", "Attempting to send payload to $endpointId")
+        Log.d("PaySetu_P2P", "Attempting to connect to $endpointId")
 
-        // 💡 OPTIMIZATION: We removed the explicit ConnectionOptions builder call.
-        // On many Android versions, requestConnection automatically uses the
-        // discovery strategy. This avoids the "Unresolved reference" compiler error.
         connectionsClient.requestConnection(
             "PaySetu_Sender",
             endpointId,
@@ -81,10 +83,12 @@ class P2PTransferManager(private val context: Context) {
                         override fun onPayloadReceived(id: String, payload: Payload) {}
 
                         override fun onPayloadTransferUpdate(id: String, update: PayloadTransferUpdate) {
-                            // 🚀 THE MAGIC: Native hardware confirmation
                             if (update.status == PayloadTransferUpdate.Status.SUCCESS) {
                                 Log.d("PaySetu_P2P", "Hardware Delivery Confirmed!")
                                 onDeliveryConfirmed()
+                            } else if (update.status == PayloadTransferUpdate.Status.FAILURE) {
+                                Log.e("PaySetu_P2P", "Payload transfer failed during upload")
+                                onFailure("Radio transfer failed")
                             }
                         }
                     })
@@ -92,9 +96,19 @@ class P2PTransferManager(private val context: Context) {
 
                 override fun onConnectionResult(id: String, result: ConnectionResolution) {
                     if (result.status.isSuccess) {
-                        Log.d("PaySetu_P2P", "Connection Success. Sending Payload...")
-                        val payload = Payload.fromBytes(payloadData.toByteArray())
-                        connectionsClient.sendPayload(id, payload)
+                        Log.d("PaySetu_P2P", "Connection Success. Waiting for socket...")
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            try {
+                                val payload = Payload.fromBytes(payloadData.toByteArray(Charsets.UTF_8))
+                                connectionsClient.sendPayload(id, payload)
+                            } catch (e: Exception) {
+                                Log.e("PaySetu_P2P", "Payload conversion failed", e)
+                                onFailure("Failed to package transaction")
+                            }
+                        }, 250)
+                    } else {
+                        Log.e("PaySetu_P2P", "Connection rejected/failed: ${result.status.statusCode}")
+                        onFailure("Connection rejected by receiver")
                     }
                 }
 
@@ -105,9 +119,12 @@ class P2PTransferManager(private val context: Context) {
         ).addOnFailureListener { e ->
             if (e.message?.contains("8003") == true || e.message?.contains("ALREADY_CONNECTED") == true) {
                 Log.d("PaySetu_P2P", "Already connected. Firing payload directly.")
-                val payload = Payload.fromBytes(payloadData.toByteArray())
+                val payload = Payload.fromBytes(payloadData.toByteArray(Charsets.UTF_8))
                 connectionsClient.sendPayload(endpointId, payload)
                 onDeliveryConfirmed()
+            } else {
+                Log.e("PaySetu_P2P", "requestConnection failed", e)
+                onFailure(e.message ?: "Connection request failed")
             }
         }
     }
@@ -122,6 +139,8 @@ class P2PTransferManager(private val context: Context) {
             override fun onConnectionResult(id: String, result: ConnectionResolution) {
                 if (result.status.isSuccess) {
                     Log.d("PaySetu_P2P", "Connection established with $id")
+                } else {
+                    Log.e("PaySetu_P2P", "Receiver connection failed: ${result.status.statusCode}")
                 }
             }
 
@@ -134,7 +153,7 @@ class P2PTransferManager(private val context: Context) {
         object : PayloadCallback() {
             override fun onPayloadReceived(id: String, payload: Payload) {
                 payload.asBytes()?.let {
-                    val dataString = String(it)
+                    val dataString = String(it, Charsets.UTF_8)
                     Log.d("PaySetu_P2P", "Raw Payload Received: $dataString")
                     onReceived(dataString)
                 }
@@ -143,10 +162,15 @@ class P2PTransferManager(private val context: Context) {
             override fun onPayloadTransferUpdate(id: String, update: PayloadTransferUpdate) {}
         }
 
+    // 🛡️ FIX: Hard Reset to clear Zombie Sockets
     fun stopAll() {
-        connectionsClient.stopAllEndpoints()
-        connectionsClient.stopAdvertising()
-        connectionsClient.stopDiscovery()
-        Log.d("PaySetu_P2P", "Radios shut down.")
+        try {
+            connectionsClient.stopDiscovery()
+            connectionsClient.stopAdvertising()
+            connectionsClient.stopAllEndpoints()
+            Log.d("PaySetu_P2P", "Radios hard reset.")
+        } catch (e: Exception) {
+            Log.e("PaySetu_P2P", "Error shutting down radios", e)
+        }
     }
 }

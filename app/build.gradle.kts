@@ -17,16 +17,18 @@ android {
         versionName = "1.0"
     }
 
-    // ✅ FORCE R8 PROGUARD RULES ON DEBUG BUILDS
     buildTypes {
         getByName("debug") {
-            isMinifyEnabled = true // This makes the debug build use proguard-rules.pro
+            // 🛡️ FIX 1: MUST BE FALSE IN DEBUG!
+            // Minifying debug builds breaks ML Kit's native JNI bindings and makes the scanner "blind".
+            isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
         getByName("release") {
+            // Minification is fine here, BUT ensure your proguard-rules.pro keeps ML Kit classes!
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -79,16 +81,26 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp(libs.androidx.room.compiler)
+
+    // Nearby Connections
     implementation("com.google.android.gms:play-services-nearby:19.0.0")
+
+    // Permissions
     implementation("com.google.accompanist:accompanist-permissions:0.34.0")
+
     // QR Code Generation (ZXing Core)
     implementation("com.google.zxing:core:3.5.2")
 
-    // QR Code Scanning (Google ML Kit + CameraX)
-    implementation("com.google.mlkit:barcode-scanning:17.2.0")
-    implementation("androidx.camera:camera-camera2:1.3.1")
-    implementation("androidx.camera:camera-lifecycle:1.3.1")
-    implementation("androidx.camera:camera-view:1.3.1")
+    // 🛡️ FIX 2: BUMPED VERSIONS FOR HARDWARE COMPATIBILITY
+    // QR Code Scanning (Google ML Kit)
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+
+    // CameraX (Bumped to 1.4.0 for Xiaomi/Mediatek autofocus bug fixes)
+    val cameraxVersion = "1.4.0"
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+    implementation("androidx.camera:camera-view:$cameraxVersion")
+
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.biometric:biometric:1.2.0-alpha05")
 }

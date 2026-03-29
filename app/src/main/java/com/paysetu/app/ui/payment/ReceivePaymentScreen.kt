@@ -3,6 +3,7 @@ package com.paysetu.app.ui.payment
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -69,9 +70,12 @@ fun ReceivePaymentScreen(
         sessionId?.let { QrCodeGenerator.generateQrCode(it) }
     }
 
+    // 🛡️ THE EXORCISM: Failsafe state cleanup on exit
     DisposableEffect(Unit) {
         onDispose {
+            Log.d("PaySetu_UI", "Leaving Receive Screen. Stopping radios and resetting state.")
             viewModel.stopOfflineMode()
+            viewModel.reset() // 💡 Ensures state isn't stuck if user system-swipes back
         }
     }
 
@@ -91,6 +95,7 @@ fun ReceivePaymentScreen(
                 IconButton(
                     onClick = {
                         viewModel.stopOfflineMode()
+                        viewModel.reset() // 💡 Clean state
                         onReject()
                     },
                     modifier = Modifier.size(24.dp)
@@ -137,7 +142,9 @@ fun ReceivePaymentScreen(
                                             modifier = Modifier.fillMaxSize()
                                         )
 
-                                        // 💡 BRANDED LOGO CENTER
+                                        // 💡 FIX: Disabled BRANDED LOGO CENTER to prevent data matrix corruption
+                                        // Unless QrCodeGenerator uses Error Correction Level H, this will block ML Kit.
+                                        /*
                                         Surface(
                                             modifier = Modifier.size(48.dp),
                                             color = Color.White,
@@ -152,6 +159,7 @@ fun ReceivePaymentScreen(
                                                 Text("P", color = EmeraldGreen, fontWeight = FontWeight.Black, fontSize = 20.sp)
                                             }
                                         }
+                                        */
                                     }
                                 }
                             }
@@ -227,6 +235,7 @@ fun ReceivePaymentScreen(
                         OutlinedButton(
                             onClick = {
                                 viewModel.stopOfflineMode()
+                                viewModel.reset() // 💡 Clean state
                                 onReject()
                             },
                             modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -303,7 +312,10 @@ fun ReceivePaymentScreen(
                         Spacer(modifier = Modifier.weight(1f))
 
                         Button(
-                            onClick = onAccept,
+                            onClick = {
+                                viewModel.reset() // 💡 Clean state so we don't get stuck!
+                                onAccept()
+                            },
                             modifier = Modifier.fillMaxWidth().height(56.dp),
                             shape = RoundedCornerShape(16.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)

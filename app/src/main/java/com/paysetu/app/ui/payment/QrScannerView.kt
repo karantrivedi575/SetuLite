@@ -2,7 +2,6 @@ package com.paysetu.app.ui.payment
 
 import android.annotation.SuppressLint
 import android.util.Log
-import android.util.Size
 import android.view.MotionEvent
 import androidx.annotation.OptIn
 import androidx.camera.core.*
@@ -17,6 +16,7 @@ import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.ZoomSuggestionOptions // 💡 ADDED IMPORT
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
@@ -31,20 +31,29 @@ fun QrScannerView(
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnCodeScanned by rememberUpdatedState(onCodeScanned)
 
-    // 1. Persistent resources
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-    val scanner = remember {
-        val options = BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-            // Improves detection for low-contrast/inverted codes common on Xiaomi
-            .enableAllPotentialBarcodes()
-            .build()
-        BarcodeScanning.getClient(options)
-    }
 
-    // 2. State & UI Reference
     var isDetected by remember { mutableStateOf(false) }
     var cameraControl: CameraControl? by remember { mutableStateOf(null) }
+
+    val scanner = remember {
+        // 💡 THE FIX: CameraX requires a ZoomCallback to physically move the lens
+        val zoomCallback = ZoomSuggestionOptions.ZoomCallback { zoomRatio ->
+            cameraControl?.setZoomRatio(zoomRatio)
+            true
+        }
+
+        val zoomOptions = ZoomSuggestionOptions.Builder(zoomCallback)
+            .setMaxSupportedZoomRatio(5.0f) // Allow up to 5x auto-zoom
+            .build()
+
+        val options = BarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .setZoomSuggestionOptions(zoomOptions) // 🚀 This is the correct Auto-Zoom API!
+            .build()
+
+        BarcodeScanning.getClient(options)
+    }
 
     val previewView = remember {
         PreviewView(context).apply {
@@ -52,52 +61,50 @@ fun QrScannerView(
         }
     }
 
-    // 3. Bind Camera (Runs once per entry)
     LaunchedEffect(Unit) {
-        val cameraProvider = ProcessCameraProvider.getInstance(context).let {
-            try { it.get() } catch (e: Exception) { null }
-        } ?: return@LaunchedEffect
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
-        val preview = Preview.Builder()
-            .setTargetResolution(Size(1280, 720))
-            .build()
-            .also { it.setSurfaceProvider(previewView.surfaceProvider) }
+        cameraProviderFuture.addListener({
+            val cameraProvider = cameraProviderFuture.get()
 
-        val imageAnalysis = ImageAnalysis.Builder()
-            .setTargetResolution(Size(1280, 720))
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .build()
+            val preview = Preview.Builder()
+                .build()
+                .also { it.setSurfaceProvider(previewView.surfaceProvider) }
 
-        imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-            if (isDetected) {
-                imageProxy.close()
-                return@setAnalyzer
-            }
+            val imageAnalysis = ImageAnalysis.Builder()
+                .setTargetResolution(android.util.Size(1280, 720))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
 
-            processImageProxy(scanner, imageProxy) { result ->
-                if (!isDetected) {
-                    isDetected = true
-                    previewView.post { currentOnCodeScanned(result) }
+            imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                if (isDetected) {
+                    imageProxy.close()
+                    return@setAnalyzer
+                }
+
+                processImageProxy(scanner, imageProxy) { result ->
+                    if (!isDetected) {
+                        isDetected = true
+                        previewView.post { currentOnCodeScanned(result) }
+                    }
                 }
             }
-        }
 
-        try {
-            cameraProvider.unbindAll()
-            val camera = cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                CameraSelector.DEFAULT_BACK_CAMERA,
-                preview,
-                imageAnalysis
-            )
-            // Capture control to allow Tap-to-Focus
-            cameraControl = camera.cameraControl
-        } catch (e: Exception) {
-            Log.e("QrScannerView", "Binding failed", e)
-        }
+            try {
+                cameraProvider.unbindAll()
+                val camera = cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview,
+                    imageAnalysis
+                )
+                cameraControl = camera.cameraControl // 🔗 Binds the control so auto-zoom can use it!
+            } catch (e: Exception) {
+                Log.e("PaySetu_QR", "Camera Binding failed", e)
+            }
+        }, ContextCompat.getMainExecutor(context))
     }
 
-    // 4. Cleanup
     DisposableEffect(Unit) {
         onDispose {
             cameraExecutor.shutdown()
@@ -105,7 +112,6 @@ fun QrScannerView(
         }
     }
 
-    // 5. UI with Tap-to-Focus
     AndroidView(
         factory = {
             previewView.apply {
@@ -136,9 +142,10 @@ private fun processImageProxy(
         scanner.process(image)
             .addOnSuccessListener { barcodes ->
                 for (barcode in barcodes) {
-                    val rawValue = barcode.rawValue
-                    // Using contains + ignoreCase to make the "SETU-" check bulletproof
-                    if (rawValue != null && rawValue.contains("SETU-", ignoreCase = true)) {
+                    val rawValue = barcode.rawValue ?: continue
+                    Log.d("PaySetu_QR", "SCANNED RAW PAYLOAD: $rawValue")
+
+                    if (rawValue.contains("SETU", ignoreCase = true) || rawValue.length > 4) {
                         onResult(rawValue)
                         break
                     }

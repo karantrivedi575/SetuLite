@@ -5,6 +5,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountBalance
@@ -15,14 +18,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.paysetu.app.ui.components.CustomNumpad // 💡 Make sure this import is added
+import kotlinx.coroutines.delay
 
 // 💎 PREMIUM PALETTE
 private val DeepSlateGradient = Brush.verticalGradient(listOf(Color(0xFF0F172A), Color(0xFF020617)))
@@ -47,6 +57,10 @@ fun AddFundsScreen(
     var amountText by remember { mutableStateOf("") }
     val uiState by viewModel.uiState.collectAsState()
 
+    // ⌨️ Keyboard Focus Management
+    val focusManager = LocalFocusManager.current
+    val amountFocusRequester = remember { FocusRequester() }
+
     // 💡 Strict Validation Logic (Untouched)
     val amountLong = amountText.toLongOrNull() ?: 0L
     val isAmountInvalid = amountText.isNotEmpty() && amountLong <= 0
@@ -57,6 +71,12 @@ fun AddFundsScreen(
         if (uiState is PaymentUiState.Success) {
             onSuccess()
         }
+    }
+
+    // Auto-pop the keyboard when the screen loads smoothly
+    LaunchedEffect(Unit) {
+        delay(300)
+        amountFocusRequester.requestFocus()
     }
 
     Box(
@@ -115,7 +135,7 @@ fun AddFundsScreen(
 
             Spacer(modifier = Modifier.height(40.dp))
 
-            // 💰 DYNAMIC AMOUNT DISPLAY (Replaces TextField)
+            // 💰 NATIVE KEYBOARD AMOUNT DISPLAY
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Enter Amount", color = SoftText, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(12.dp))
@@ -132,14 +152,52 @@ fun AddFundsScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = amountText.ifEmpty { "0" },
-                        fontSize = 56.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace,
-                        color = if (isExceedingLimit) RoseError else Color.White,
-                        letterSpacing = (-1.5).sp,
-                        textAlign = TextAlign.Center
+
+                    BasicTextField(
+                        value = amountText,
+                        onValueChange = { newValue ->
+                            val filtered = newValue.filter { it.isDigit() }
+                            // 10000 is 5 digits long, so limit input to 5 characters
+                            if (filtered.length <= 5) {
+                                amountText = filtered
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.NumberPassword, // Best for avoiding text suggestions
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = { focusManager.clearFocus() }
+                        ),
+                        textStyle = TextStyle(
+                            fontSize = 56.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (isExceedingLimit) RoseError else Color.White,
+                            letterSpacing = (-1.5).sp,
+                            textAlign = TextAlign.Center
+                        ),
+                        cursorBrush = SolidColor(AccentGold),
+                        modifier = Modifier
+                            .width(IntrinsicSize.Min)
+                            .defaultMinSize(minWidth = 50.dp)
+                            .focusRequester(amountFocusRequester),
+                        decorationBox = { innerTextField ->
+                            Box {
+                                if (amountText.isEmpty()) {
+                                    Text(
+                                        text = "0",
+                                        fontSize = 56.sp,
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = Color.White.copy(alpha = 0.2f),
+                                        letterSpacing = (-1.5).sp,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        }
                     )
                 }
 
@@ -181,21 +239,10 @@ fun AddFundsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // ⌨️ CUSTOM NUMPAD INTEGRATION
-            CustomNumpad(
-                onNumberClick = { digit ->
-                    // Prevent users from typing massive numbers that break UI/Logic (e.g., max 5 digits for 10k limit)
-                    if (amountText.length < 5) amountText += digit.toString()
-                },
-                onBackspaceClick = {
-                    if (amountText.isNotEmpty()) amountText = amountText.dropLast(1)
-                },
-                modifier = Modifier.padding(bottom = 24.dp)
-            )
-
             // 🚀 AUTHORIZE BUTTON
             Button(
                 onClick = {
+                    focusManager.clearFocus() // Ensure keyboard drops when they authorize
                     if (amountLong > 0 && !isExceedingLimit) {
                         viewModel.addCreditsFromBank(amountLong)
                     }

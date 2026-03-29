@@ -43,6 +43,7 @@ import com.paysetu.app.ui.payment.AddFundsScreen
 import com.paysetu.app.ui.payment.PaymentViewModel
 import com.paysetu.app.ui.payment.ReceivePaymentScreen
 import com.paysetu.app.ui.payment.SendPaymentScreen
+import com.paysetu.app.ui.common.PermissionGate // 🛡️ ADDED: Permission Gate Import
 
 // 💎 REFINED MONOCHROME + EMERALD PALETTE
 val DeepSlateGradient = Brush.verticalGradient(listOf(Color(0xFF0F172A), Color(0xFF020617)))
@@ -331,16 +332,26 @@ fun MainScreen(
             }
         }
 
-        "SEND" -> SendPaymentScreen(
-            viewModel = paymentViewModel,
-            onBack = { currentScreen = "HOME" }
-        )
+        // 🛡️ WRAPPED IN PERMISSION GATE
+        "SEND" -> {
+            PermissionGate {
+                SendPaymentScreen(
+                    viewModel = paymentViewModel,
+                    onBack = { currentScreen = "HOME" }
+                )
+            }
+        }
 
-        "RECEIVE" -> ReceivePaymentScreen(
-            viewModel = paymentViewModel,
-            onAccept = { currentScreen = "HOME" },
-            onReject = { currentScreen = "HOME" }
-        )
+        // 🛡️ WRAPPED IN PERMISSION GATE
+        "RECEIVE" -> {
+            PermissionGate {
+                ReceivePaymentScreen(
+                    viewModel = paymentViewModel,
+                    onAccept = { currentScreen = "HOME" },
+                    onReject = { currentScreen = "HOME" }
+                )
+            }
+        }
 
         "LEDGER" -> LedgerScreen(
             repository = ledgerRepository,

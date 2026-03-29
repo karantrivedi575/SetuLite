@@ -48,9 +48,6 @@ class PaymentViewModel(
             initialValue = emptyList()
         )
 
-    // ==========================================
-    // 🛡️ LEDGER INTEGRITY SCAN (PHASE 16)
-    // ==========================================
     val isLedgerIntact: StateFlow<Boolean> = ledgerHistory.map { history ->
         if (history.size < 2) return@map true
         for (i in 0 until history.size - 1) {
@@ -62,11 +59,7 @@ class PaymentViewModel(
             }
         }
         true
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = true
-    )
+    }.stateIn(scope = viewModelScope, started = SharingStarted.WhileSubscribed(5000), initialValue = true)
 
     private val _myQrSessionId = MutableStateFlow<String?>(null)
     val myQrSessionId: StateFlow<String?> = _myQrSessionId
@@ -75,19 +68,13 @@ class PaymentViewModel(
     private var isRadioActive = false
 
     // ==========================================
-    // 📨 PHASE 17: BINARY SMS LOGIC (NEW)
+    // 📨 PHASE 17: BINARY SMS LOGIC
     // ==========================================
-
-    /**
-     * SEPARATE OPTION: Sends a cryptographically signed transaction via Port 8901.
-     * Bypasses standard SMS inbox and requires no Wi-Fi/Bluetooth.
-     */
     fun sendSmsPayment(context: Context, phoneNumber: String, amount: Long) {
         viewModelScope.launch {
             _uiState.value = PaymentUiState.SmsSending(phoneNumber)
 
             try {
-                // 1. Balance Check (Overdraft Protection)
                 val currentBalance = ledgerHistory.value.sumOf {
                     if (it.direction == TransactionDirection.INCOMING) it.amount else -it.amount
                 }
@@ -97,35 +84,25 @@ class PaymentViewModel(
                     return@launch
                 }
 
-                // 2. Cryptographic Ledger Entry
                 val resultHashHex = withContext(Dispatchers.Default) {
                     val lastTx = withContext(Dispatchers.IO) { ledgerRepository.getLastTransaction() }
                     val validatedPrevHash = lastTx?.txHash ?: ByteArray(32) { 0 }
 
                     val txTemplate = LedgerTransactionEntity(
-                        id = 0L,
-                        txHash = ByteArray(0),
-                        prevTxHash = validatedPrevHash,
-                        senderDeviceId = "LOCAL_SMS_NODE".toByteArray(),
-                        receiverDeviceId = phoneNumber.toByteArray(),
-                        amount = amount,
-                        timestamp = System.currentTimeMillis(),
-                        signature = ByteArray(0),
-                        direction = TransactionDirection.OUTGOING,
-                        status = TransactionStatus.ACCEPTED
+                        id = 0L, txHash = ByteArray(0), prevTxHash = validatedPrevHash,
+                        senderDeviceId = "LOCAL_SMS_NODE".toByteArray(), receiverDeviceId = phoneNumber.toByteArray(),
+                        amount = amount, timestamp = System.currentTimeMillis(), signature = ByteArray(0),
+                        direction = TransactionDirection.OUTGOING, status = TransactionStatus.ACCEPTED
                     )
 
                     val finalTxHash = calculateTransactionHash(txTemplate)
                     val digitalSignature = transactionSigner.sign(finalTxHash)
                     val finalTx = txTemplate.copy(txHash = finalTxHash, signature = digitalSignature)
 
-                    withContext(Dispatchers.IO) {
-                        ledgerRepository.appendTransactionAtomically(finalTx)
-                    }
+                    withContext(Dispatchers.IO) { ledgerRepository.appendTransactionAtomically(finalTx) }
                     bytesToHex(finalTx.txHash)
                 }
 
-                // 3. SMS Dispatch (Port 8901)
                 val payload = "SETU-TX-OFFLINE|$amount|$resultHashHex"
                 val data = payload.toByteArray(Charsets.UTF_8)
                 val port: Short = 8901
@@ -138,10 +115,8 @@ class PaymentViewModel(
                 }
 
                 smsManager.sendDataMessage(phoneNumber, null, port, data, null, null)
-
                 Log.i("PaySetu_SMS", "Binary Transaction Dispatched: $payload")
-
-                delay(1000) // UI breathing room
+                delay(1000)
                 _uiState.value = PaymentUiState.Success(resultHashHex, amount)
 
             } catch (e: Exception) {
@@ -151,28 +126,20 @@ class PaymentViewModel(
         }
     }
 
-    /**
-     * Bridge for incoming SMS from the SmsPaymentReceiver
-     */
     fun processIncomingSms(payload: String) {
         viewModelScope.launch {
             _uiState.value = PaymentUiState.Processing
             val result = transactionProcessor.processIncomingPayload(payload)
             result.fold(
-                onSuccess = { (txHash, amount) ->
-                    _uiState.value = PaymentUiState.Success(txHash, amount)
-                },
-                onFailure = { error ->
-                    _uiState.value = PaymentUiState.Failure(error.message ?: "SMS Payment Invalid")
-                }
+                onSuccess = { (txHash, amount) -> _uiState.value = PaymentUiState.Success(txHash, amount) },
+                onFailure = { error -> _uiState.value = PaymentUiState.Failure(error.message ?: "SMS Payment Invalid") }
             )
         }
     }
 
     // ==========================================
-    // 💡 OFFLINE P2P LOGIC (NEARBY) - PRESERVED
+    // 💡 OFFLINE P2P LOGIC (NEARBY)
     // ==========================================
-
     fun startReceivingOffline(userName: String = "PaySetu User") {
         if (isRadioActive) return
         isRadioActive = true
@@ -182,31 +149,35 @@ class PaymentViewModel(
         val sessionId = "SETU-" + UUID.randomUUID().toString().take(6).uppercase()
         _myQrSessionId.value = sessionId
 
-        p2pManager.startBroadcasting(sessionId) { payload ->
-            viewModelScope.launch {
-                _uiState.value = PaymentUiState.Processing
-                val result = transactionProcessor.processIncomingPayload(payload)
-                result.fold(
-                    onSuccess = { (txHashHex, receivedAmount) ->
-                        _uiState.value = PaymentUiState.Success(txHashHex, receivedAmount)
-                        delay(500)
-                        stopOfflineMode()
-                    },
-                    onFailure = { error ->
-                        _uiState.value = PaymentUiState.Failure(error.message ?: "Compromised transaction rejected")
-                        delay(500)
-                        stopOfflineMode()
-                    }
-                )
+        // 🛡️ THE EXORCISM: Add a 400ms debounce to prevent SOCKET_CLOSED hardware crash
+        viewModelScope.launch {
+            delay(400)
+            p2pManager.startBroadcasting(sessionId) { payload ->
+                viewModelScope.launch {
+                    _uiState.value = PaymentUiState.Processing
+                    val result = transactionProcessor.processIncomingPayload(payload)
+                    result.fold(
+                        onSuccess = { (txHashHex, receivedAmount) ->
+                            _uiState.value = PaymentUiState.Success(txHashHex, receivedAmount)
+                        },
+                        onFailure = { error ->
+                            _uiState.value = PaymentUiState.Failure(error.message ?: "Compromised transaction rejected")
+                        }
+                    )
+                }
             }
         }
     }
 
     fun startTargetedDiscovery(scannedQrCode: String, amountToSend: Long) {
+        if (isRadioActive) return
+        isRadioActive = true
         _uiState.value = PaymentUiState.Processing
         p2pManager.stopAll()
+
         viewModelScope.launch {
-            delay(500)
+            // 🛡️ THE EXORCISM: Standardized 400ms Hardware Cooldown
+            delay(400)
             startTimeoutTimer(15000, "Receiver not found. Ensure the QR code is still visible.")
             p2pManager.startDiscovering { endpointId, endpointName ->
                 if (endpointName == scannedQrCode) {
@@ -255,25 +226,32 @@ class PaymentViewModel(
                 }
 
                 val payloadData = "TX_PAYLOAD:{hash:${resultHash},amount:$amount}"
-                p2pManager.sendTransaction(receiverEndpointId, payloadData) {
-                    connectionTimeoutJob?.cancel()
-                    viewModelScope.launch {
-                        _uiState.value = PaymentUiState.Success(resultHash, amount)
-                        delay(800)
-                        stopOfflineMode()
+
+                p2pManager.sendTransaction(
+                    endpointId = receiverEndpointId,
+                    payloadData = payloadData,
+                    onDeliveryConfirmed = {
+                        connectionTimeoutJob?.cancel()
+                        viewModelScope.launch {
+                            _uiState.value = PaymentUiState.Success(resultHash, amount)
+                        }
+                    },
+                    onFailure = { reason ->
+                        connectionTimeoutJob?.cancel()
+                        viewModelScope.launch {
+                            _uiState.value = PaymentUiState.Failure(reason)
+                        }
                     }
-                }
+                )
             } catch (e: Exception) {
                 connectionTimeoutJob?.cancel()
                 _uiState.value = PaymentUiState.Failure(e.message ?: "Offline transaction failed")
-                delay(500)
-                stopOfflineMode()
             }
         }
     }
 
     // ==========================================
-    // 🏦 BANK TOP-UP LOGIC - PRESERVED
+    // 🏦 BANK TOP-UP LOGIC
     // ==========================================
     fun addCreditsFromBank(creditAmount: Long) {
         viewModelScope.launch {
@@ -305,14 +283,13 @@ class PaymentViewModel(
     }
 
     // ==========================================
-    // UTILITIES & LIFECYCLE - PRESERVED
+    // UTILITIES & LIFECYCLE
     // ==========================================
     private fun startTimeoutTimer(duration: Long, errorMessage: String) {
         connectionTimeoutJob?.cancel()
         connectionTimeoutJob = viewModelScope.launch {
             delay(duration)
             if (_uiState.value is PaymentUiState.Processing) {
-                stopOfflineMode()
                 _uiState.value = PaymentUiState.Failure(errorMessage)
             }
         }
@@ -324,14 +301,13 @@ class PaymentViewModel(
         p2pManager.stopAll()
         _myQrSessionId.value = null
         connectionTimeoutJob?.cancel()
-        reset()
     }
 
     fun reset() { _uiState.value = PaymentUiState.Idle }
 
     override fun onCleared() {
         super.onCleared()
-        isRadioActive = true
+        isRadioActive = true // Force bypass the check
         stopOfflineMode()
     }
 
