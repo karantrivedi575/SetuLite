@@ -1,7 +1,10 @@
 package com.paysetu.app.ui
 
+import android.app.Application
 import android.os.Bundle
+import android.util.Log // 💡 Added for the BackHandler
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler // 💡 ADDED: Modern predictive back handling
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -12,7 +15,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.paysetu.app.ui.PaySetuApp
 import com.paysetu.app.data.device.DeviceStateRepository
 import com.paysetu.app.data.ledger.LedgerRepository
 import com.paysetu.app.data.ledger.TransactionProcessor
@@ -52,6 +54,15 @@ class MainActivity : FragmentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = Color(0xFF0F172A)
                 ) {
+                    // 💡 THE FIX: Android 13+ Predictive Back Handling.
+                    // This intercepts the system back gesture gracefully and satisfies the Manifest warning.
+                    BackHandler(enabled = true) {
+                        Log.d("MainActivity", "System Back Gesture intercepted safely.")
+                        // You can handle custom back stack navigation here.
+                        // If you are at the root of the app, call finish() to exit gracefully.
+                        finish()
+                    }
+
                     // 🛡️ THE FIX: PermissionGate no longer takes parameters!
                     PermissionGate {
                         MainScreen(
@@ -70,6 +81,7 @@ class MainActivity : FragmentActivity() {
  * 💡 MultiViewModelFactory: Injects hardware modules into the UI Layer.
  */
 class MultiViewModelFactory(
+    private val application: Application,
     private val ledgerRepository: LedgerRepository,
     private val transactionSigner: KeystoreTransactionSigner,
     private val deviceStateRepository: DeviceStateRepository,
@@ -83,6 +95,7 @@ class MultiViewModelFactory(
         return when {
             modelClass.isAssignableFrom(PaymentViewModel::class.java) -> {
                 PaymentViewModel(
+                    application = application,
                     ledgerRepository = ledgerRepository,
                     transactionSigner = transactionSigner,
                     p2pManager = p2pManager,

@@ -21,19 +21,22 @@ class ReconcileLedgerUseCase(
 
         // 1. Process ACCEPTED (Clean chain)
         response.acceptedTxHashes.forEach { hashHex ->
-            ledgerRepository.updateStatus(hexToBytes(hashHex), TransactionStatus.ACCEPTED)
+            // 💡 FIX: Updated to the newly refactored method name
+            ledgerRepository.updateTransactionStatus(hexToBytes(hashHex), TransactionStatus.ACCEPTED)
         }
 
         // 2. Process REJECTED (Corrupted/Invalid)
         response.rejectedTxHashes.forEach { hashHex ->
-            ledgerRepository.updateStatus(hexToBytes(hashHex), TransactionStatus.REJECTED)
+            // 💡 FIX: Updated to the newly refactored method name
+            ledgerRepository.updateTransactionStatus(hexToBytes(hashHex), TransactionStatus.REJECTED)
         }
 
         // 3. Process CONFLICTED (Double Spends detected globally!)
         // These remain in the local database for audit purposes, but their balances
         // are voided, and they visually flag the user as fraudulent.
         response.conflictedTxHashes.forEach { hashHex ->
-            ledgerRepository.updateStatus(hexToBytes(hashHex), TransactionStatus.CONFLICTED)
+            // 💡 FIX: Updated to the newly refactored method name
+            ledgerRepository.updateTransactionStatus(hexToBytes(hashHex), TransactionStatus.CONFLICTED)
         }
 
         // 4. Evolve Trust Score based on Server's Risk Engine

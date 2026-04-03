@@ -1,15 +1,23 @@
+# --- IDE & System ---
+.idea/
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+.gradle/
 local.properties
+.DS_Store
+Thumbs.db
+
+# --- Build Outputs ---
+build/
+app/build/
+captures/
+
+# --- Native Build ---
+.externalNativeBuild/
+.cxx/
+
+# --- Keystores & Secrets (Safety First) ---
+*.jks
+*.p12
+*.key
+*.pem
+google-services.json

@@ -1,6 +1,20 @@
-.gradle/
-build/
-local.properties
+# --- Build Outputs ---
+# Ignore the build folder specific to this module
+/build
+
+# --- Keystores & Sensitive Keys ---
+# Often stored in the app folder for signing
 *.jks
 *.p12
 *.key
+*.pem
+
+# --- Firebase / Google Services ---
+# If you decide to keep the original at the root,
+# you can leave this here as an extra safety net.
+google-services.json
+
+# --- ProGuard/R8 Mapping Files ---
+# These are generated during release builds
+/release/
+*.txt

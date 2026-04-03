@@ -7,7 +7,7 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Log
-import androidx.activity.compose.BackHandler // 💡 Added for System Back Swipe
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
@@ -17,8 +17,10 @@ import androidx.biometric.BiometricPrompt
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,18 +41,24 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -60,10 +68,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
-import com.paysetu.app.data.ledger.entity.TransactionDirection
 import com.paysetu.app.ui.payment.utils.MiuiPermissionUtils
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -81,10 +87,10 @@ private fun Modifier.glassCard(shape: RoundedCornerShape = RoundedCornerShape(16
     .background(Color.White.copy(alpha = 0.05f))
     .border(1.dp, Color.White.copy(alpha = 0.1f), shape)
 
-// 💡 EXTENDED STEP STATE MACHINE FOR PHASE 17
-private enum class SendStep { SCANNER, PHONE_ENTRY, AMOUNT_ENTRY }
+// 🚀 THE FIX: Added TAP_TO_PAY to our Mode Enum
+private enum class SendStep { SCANNER, TAP_TO_PAY, PHONE_ENTRY, AMOUNT_ENTRY }
 
-// 🛡️ NATIVE BIOMETRIC HELPER (WITH BULLETPROOF DEVICE B BYPASS)
+// 🛡️ NATIVE BIOMETRIC HELPER
 private fun promptBiometricAuth(context: Context, amount: String, onSuccess: () -> Unit, onError: () -> Unit) {
     try {
         val biometricManager = BiometricManager.from(context)
@@ -209,17 +215,27 @@ fun SendPaymentScreen(
     onBack: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val history by viewModel.ledgerHistory.collectAsState()
-    val totalBalance = remember(history) {
-        history.sumOf { if (it.direction == TransactionDirection.INCOMING) it.amount else -it.amount }
-    }
+    val totalBalance by viewModel.totalBalance.collectAsState()
 
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val focusManager = LocalFocusManager.current
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
-    val smsPermissionState = rememberPermissionState(Manifest.permission.SEND_SMS)
+
+    // We still request these, but we don't block the scanner if they are missing
+    val requiredPermissions = mutableListOf<String>()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        requiredPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
+        requiredPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+    } else {
+        requiredPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+    val hardwarePermissionState = com.google.accompanist.permissions.rememberMultiplePermissionsState(permissions = requiredPermissions)
+
+    val smsPermissionState = com.google.accompanist.permissions.rememberMultiplePermissionsState(
+        permissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS)
+    )
 
     var currentStep by remember { mutableStateOf(SendStep.SCANNER) }
     var isSmsFlow by remember { mutableStateOf(false) }
@@ -227,9 +243,21 @@ fun SendPaymentScreen(
     var amountText by remember { mutableStateOf("") }
     var phoneInput by remember { mutableStateOf("") }
 
-    // 🛡️ HARDWARE BREATH & FOCUS MANAGEMENT
     var isCameraPrepped by remember { mutableStateOf(false) }
     val amountFocusRequester = remember { FocusRequester() }
+
+    // 🚀 UI catches EventBus to prevent multiple ViewModel instance issues
+    LaunchedEffect(Unit) {
+        OfflinePaymentEventBus.ackReceived.collect { ackHash ->
+            if (ackHash != null) {
+                if (uiState is PaymentUiState.SmsSending || uiState is PaymentUiState.Processing) {
+                    Log.i("PaySetu_UI", "UI directly caught EventBus ACK! Forcing Success State.")
+                    viewModel.forceSuccessState(ackHash)
+                    OfflinePaymentEventBus.clearAck()
+                }
+            }
+        }
+    }
 
     LaunchedEffect(currentStep) {
         if (currentStep == SendStep.SCANNER) {
@@ -237,11 +265,37 @@ fun SendPaymentScreen(
             isCameraPrepped = true
         } else {
             isCameraPrepped = false
+            // Asynchronous Camera Unbinding prevents the 6-second Main Thread lockup!
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+            cameraProviderFuture.addListener({
+                try { cameraProviderFuture.get().unbindAll() } catch (e: Exception) {}
+            }, ContextCompat.getMainExecutor(context))
         }
 
-        // ⌨️ Auto-show keyboard when entering Amount step
+        // 🚀 THE FIX: If user chooses Tap to Pay, trigger the dedicated BLE Logic
+        if (currentStep == SendStep.TAP_TO_PAY) {
+            if (hardwarePermissionState.allPermissionsGranted) {
+                viewModel.startTapToPayMode { tapId ->
+                    // THUMP! Apple-style heavy haptic feedback
+                    val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vibrator.vibrate(VibrationEffect.createOneShot(100, 255))
+                    } else {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    }
+
+                    scannedReceiverId = tapId
+                    isSmsFlow = false
+                    currentStep = SendStep.AMOUNT_ENTRY
+                }
+            } else {
+                hardwarePermissionState.launchMultiplePermissionRequest()
+                currentStep = SendStep.SCANNER // Kick them back if they don't have permissions
+            }
+        }
+
         if (currentStep == SendStep.AMOUNT_ENTRY) {
-            delay(300) // Slight delay for smooth transition
+            delay(300)
             amountFocusRequester.requestFocus()
         }
     }
@@ -250,24 +304,19 @@ fun SendPaymentScreen(
         BiometricManager.from(context).canAuthenticate(BIOMETRIC_STRONG or DEVICE_CREDENTIAL) == BiometricManager.BIOMETRIC_SUCCESS
     }
 
-    // 📞 CONTACT PICKER LAUNCHER
     val contactPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             result.data?.data?.let { uri ->
-                val cursor = context.contentResolver.query(
-                    uri,
-                    arrayOf(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER),
-                    null, null, null
-                )
+                val cursor = context.contentResolver.query(uri, arrayOf(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER), null, null, null)
                 cursor?.use {
                     if (it.moveToFirst()) {
                         val colIndex = it.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
                         if (colIndex != -1) {
-                            val number = it.getString(colIndex)
-                            // Cleans spaces, brackets, and dashes while preserving digits and +
-                            phoneInput = number.replace(Regex("[^0-9+]"), "")
+                            var number = it.getString(colIndex).replace(Regex("[^0-9]"), "")
+                            if (number.length > 10) number = number.takeLast(10)
+                            phoneInput = number
                         }
                     }
                 }
@@ -275,246 +324,302 @@ fun SendPaymentScreen(
         }
     }
 
-    // 🛡️ THE EXORCISM: Explicit Camera Unbind & Safe Cleanup
     DisposableEffect(lifecycleOwner) {
         onDispose {
-            Log.d("PaySetu_UI", "Leaving Send Screen. Stopping radios and dropping camera lock.")
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+            cameraProviderFuture.addListener({
+                try { cameraProviderFuture.get().unbindAll() } catch (e: Exception) {}
+            }, ContextCompat.getMainExecutor(context))
 
-            // 💡 1. Force CameraX to release the lens immediately!
-            try {
-                val cameraProvider = ProcessCameraProvider.getInstance(context).get()
-                cameraProvider.unbindAll()
-            } catch (e: Exception) {
-                Log.w("PaySetu_Hardware", "Camera unbind safely bypassed: ${e.message}")
-            }
-
-            // 💡 2. Stop offline mode
             viewModel.stopOfflineMode()
+            viewModel.reset()
         }
     }
 
-    // 💡 UNIFIED BACK NAVIGATION LOGIC
     val handleBackAction = {
-        // Block exit only if actively processing
-        if (uiState is PaymentUiState.Processing || uiState is PaymentUiState.SmsSending) {
-            // Do nothing, let it finish.
-        }
-        // If success or failure, clicking back should just finish and go to dashboard
-        else if (uiState is PaymentUiState.Success || uiState is PaymentUiState.Failure) {
-            viewModel.reset()
-            onBack()
-        }
-        // Normal step-back logic
-        else {
-            when (currentStep) {
-                SendStep.AMOUNT_ENTRY -> {
-                    currentStep = if (isSmsFlow) SendStep.PHONE_ENTRY else SendStep.SCANNER
-                    amountText = ""
-                }
-                SendStep.PHONE_ENTRY -> {
-                    currentStep = SendStep.SCANNER
-                    isSmsFlow = false
-                }
-                else -> {
-                    viewModel.reset()
-                    onBack()
+        when (uiState) {
+            is PaymentUiState.Processing, is PaymentUiState.SmsSending -> {
+                // Do nothing. Prevent exiting while processing.
+            }
+            is PaymentUiState.Success -> {
+                onBack()
+            }
+            is PaymentUiState.Failure -> {
+                viewModel.reset()
+            }
+            is PaymentUiState.Idle -> {
+                when (currentStep) {
+                    SendStep.AMOUNT_ENTRY -> {
+                        // 🛑 THE FIX: Hard reset the radio state if the user backs out
+                        viewModel.stopOfflineMode()
+
+                        currentStep = if (isSmsFlow) SendStep.PHONE_ENTRY else SendStep.SCANNER
+                        amountText = ""
+                    }
+                    SendStep.PHONE_ENTRY, SendStep.TAP_TO_PAY -> {
+                        viewModel.stopOfflineMode()
+                        currentStep = SendStep.SCANNER
+                        isSmsFlow = false
+                    }
+                    SendStep.SCANNER -> onBack()
                 }
             }
         }
     }
 
-    // 💡 Intercept physical device back swipe / back button
-    BackHandler(enabled = true) {
-        handleBackAction()
-    }
+    BackHandler(enabled = true) { handleBackAction() }
 
     Box(modifier = Modifier.fillMaxSize().background(DeepSlateGradient)) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // 🔹 Dynamic Top Bar
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = { handleBackAction() }, // 💡 Uses unified logic
-                    modifier = Modifier.size(24.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
-                }
-                Spacer(modifier = Modifier.width(16.dp))
-                Text(
-                    text = when (currentStep) {
-                        SendStep.SCANNER -> "Scan PaySetu QR"
-                        SendStep.PHONE_ENTRY -> "Send via SMS"
-                        SendStep.AMOUNT_ENTRY -> "Send Credits"
-                    },
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
+
+        when (val state = uiState) {
+
+            is PaymentUiState.Success -> {
+                ReceiptView(
+                    amount = state.amount.toString(),
+                    txHash = state.txHash,
+                    isSmsFlow = isSmsFlow,
+                    onDone = { handleBackAction() }
                 )
             }
 
-            // Xiaomi Optimization Check
-            XiaomiGuard(context)
+            is PaymentUiState.Processing -> {
+                ProcessingView(
+                    title = "Securing Connection...",
+                    subtitle = "Transferring funds over offline protocol.\nPlease keep devices close.",
+                    onCancel = { viewModel.stopOfflineMode() }
+                )
+            }
 
-            // 🛡️ Note: Safely removed Crossfade here previously to fix Camera Code 3 issue
-            when (currentStep) {
-                SendStep.SCANNER -> {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxSize()) {
-                        if (cameraPermissionState.status.isGranted) {
-                            Box(modifier = Modifier.fillMaxWidth().weight(1f).glassCard(RoundedCornerShape(24.dp))) {
+            is PaymentUiState.SmsSending -> {
+                ProcessingView(
+                    title = "Dispatching Secure SMS...",
+                    subtitle = "Sending encrypted payload via cellular network.\nPlease wait.",
+                    onCancel = null
+                )
+            }
 
-                                if (isCameraPrepped) {
-                                    QrScannerView(
-                                        onCodeScanned = { scannedCode ->
-                                            if (currentStep == SendStep.SCANNER) {
-                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                scannedReceiverId = scannedCode
-                                                isSmsFlow = false
-                                                currentStep = SendStep.AMOUNT_ENTRY
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp))
-                                    )
-                                } else {
-                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        CircularProgressIndicator(color = EmeraldGreen, strokeWidth = 2.dp)
-                                    }
-                                }
-
-                                val infiniteTransition = rememberInfiniteTransition(label = "scanner")
-                                val laserProgress by infiniteTransition.animateFloat(
-                                    initialValue = 0.1f,
-                                    targetValue = 0.9f,
-                                    animationSpec = infiniteRepeatable(
-                                        animation = tween(2000, easing = LinearEasing),
-                                        repeatMode = RepeatMode.Reverse
-                                    ),
-                                    label = "laser"
-                                )
-
-                                Box(modifier = Modifier.size(240.dp).align(Alignment.Center).border(2.dp, EmeraldGreen.copy(alpha = 0.3f), RoundedCornerShape(24.dp))
-                                    .drawWithContent {
-                                        drawContent()
-                                        val yPos = size.height * laserProgress
-                                        drawLine(color = EmeraldGreen, start = Offset(15f, yPos), end = Offset(size.width - 15f, yPos), strokeWidth = 4f)
-                                    }
-                                )
-
-                                Box(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp).clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
-                                    Text("Align QR within frame", color = Color.White, fontSize = 13.sp)
-                                }
-                            }
-                        } else {
-                            Column(modifier = Modifier.fillMaxWidth().weight(1f).glassCard(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                                Icon(Icons.Default.QrCodeScanner, null, tint = SoftText, modifier = Modifier.size(64.dp))
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Text("Camera access is required\nto scan the receiver's QR code.", textAlign = TextAlign.Center, color = SoftText)
-                                Spacer(modifier = Modifier.height(24.dp))
-                                Button(onClick = { cameraPermissionState.launchPermissionRequest() }, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) {
-                                    Text("Enable Camera", fontWeight = FontWeight.Bold)
-                                }
-                            }
+            is PaymentUiState.Idle, is PaymentUiState.Failure -> {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { handleBackAction() }, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
                         }
-
-                        // 📨 PHASE 17 Option
-                        Spacer(modifier = Modifier.height(24.dp))
-                        Text("OR", color = SlateBlue, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        TextButton(
-                            onClick = {
-                                isSmsFlow = true
-                                currentStep = SendStep.PHONE_ENTRY
-                            }
-                        ) {
-                            Icon(Icons.Default.Message, contentDescription = null, tint = EmeraldGreen)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Send via SMS (Port 8901)", color = EmeraldGreen, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-                }
-
-                SendStep.PHONE_ENTRY -> {
-                    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Spacer(modifier = Modifier.height(32.dp))
-                        Box(modifier = Modifier.size(72.dp).background(EmeraldGreen.copy(alpha = 0.1f), CircleShape), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.PhoneAndroid, null, tint = EmeraldGreen, modifier = Modifier.size(36.dp))
-                        }
-                        Spacer(modifier = Modifier.height(24.dp))
-                        Text("Receiver's Phone Number", color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("Enter number or pick from contacts", color = SlateBlue, fontSize = 14.sp)
-
-                        Spacer(modifier = Modifier.height(48.dp))
-
-                        OutlinedTextField(
-                            value = phoneInput,
-                            onValueChange = { phoneInput = it },
-                            textStyle = TextStyle(color = Color.White, fontSize = 24.sp, letterSpacing = 2.sp, textAlign = TextAlign.Center),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = EmeraldGreen,
-                                unfocusedBorderColor = SlateBlue,
-                                cursorColor = EmeraldGreen
-                            ),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                            placeholder = { Text("00000 00000", color = SoftText, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                            trailingIcon = {
-                                IconButton(onClick = {
-                                    val intent = Intent(Intent.ACTION_PICK).apply { type = android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_TYPE }
-                                    contactPickerLauncher.launch(intent)
-                                }) {
-                                    Icon(Icons.Default.AccountBox, contentDescription = "Contacts", tint = EmeraldGreen)
-                                }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = when (currentStep) {
+                                SendStep.SCANNER -> "Scan PaySetu QR"
+                                SendStep.TAP_TO_PAY -> "Tap to Pay"
+                                SendStep.PHONE_ENTRY -> "Send via SMS"
+                                SendStep.AMOUNT_ENTRY -> "Send Credits"
                             },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
                         )
-
-                        Spacer(modifier = Modifier.weight(1f))
-
-                        Button(
-                            onClick = {
-                                focusManager.clearFocus()
-                                if (phoneInput.isNotBlank()) {
-                                    scannedReceiverId = phoneInput
-                                    currentStep = SendStep.AMOUNT_ENTRY
-                                }
-                            },
-                            enabled = phoneInput.length > 5,
-                            modifier = Modifier.fillMaxWidth().height(60.dp),
-                            shape = RoundedCornerShape(20.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreen, contentColor = Color.Black, disabledContainerColor = Color.White.copy(0.1f))
-                        ) {
-                            Text("NEXT", fontWeight = FontWeight.Black, letterSpacing = 1.sp)
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
                     }
-                }
 
-                SendStep.AMOUNT_ENTRY -> {
-                    when (val state = uiState) {
-                        is PaymentUiState.Idle, is PaymentUiState.Failure -> {
+                    XiaomiGuard(context)
 
+                    when (currentStep) {
+                        SendStep.SCANNER -> {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxSize()) {
+                                if (cameraPermissionState.status.isGranted) {
+                                    Box(modifier = Modifier.fillMaxWidth().weight(1f).glassCard(RoundedCornerShape(24.dp))) {
+                                        if (isCameraPrepped) {
+                                            QrScannerView(
+                                                onCodeScanned = { scannedCode ->
+                                                    if (currentStep == SendStep.SCANNER) {
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        scannedReceiverId = scannedCode
+                                                        isSmsFlow = false
+                                                        currentStep = SendStep.AMOUNT_ENTRY
+                                                    }
+                                                },
+                                                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp))
+                                            )
+                                        } else {
+                                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                                CircularProgressIndicator(color = EmeraldGreen, strokeWidth = 2.dp)
+                                            }
+                                        }
+
+                                        val infiniteTransition = rememberInfiniteTransition(label = "scanner")
+                                        val laserProgress by infiniteTransition.animateFloat(
+                                            initialValue = 0.1f, targetValue = 0.9f,
+                                            animationSpec = infiniteRepeatable(animation = tween(2000, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
+                                            label = "laser"
+                                        )
+
+                                        Box(modifier = Modifier.size(240.dp).align(Alignment.Center).border(2.dp, EmeraldGreen.copy(alpha = 0.3f), RoundedCornerShape(24.dp))
+                                            .drawWithContent {
+                                                drawContent()
+                                                val yPos = size.height * laserProgress
+                                                drawLine(color = EmeraldGreen, start = Offset(15f, yPos), end = Offset(size.width - 15f, yPos), strokeWidth = 4f)
+                                            }
+                                        )
+                                    }
+                                } else {
+                                    Column(modifier = Modifier.fillMaxWidth().weight(1f).glassCard(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                                        Icon(Icons.Default.QrCodeScanner, null, tint = SoftText, modifier = Modifier.size(64.dp))
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                        Text("Camera access is required\nto scan the receiver's QR code.", textAlign = TextAlign.Center, color = SoftText)
+                                        Spacer(modifier = Modifier.height(24.dp))
+                                        Button(onClick = { cameraPermissionState.launchPermissionRequest() }, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) {
+                                            Text("Enable Camera", fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(24.dp))
+
+                                // 🚀 THE FIX: Mode Switcher Options
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceEvenly
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { currentStep = SendStep.TAP_TO_PAY }.padding(12.dp)) {
+                                        Box(modifier = Modifier.size(56.dp).glassCard(CircleShape), contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Default.Nfc, contentDescription = null, tint = EmeraldGreen)
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("Tap to Pay", color = EmeraldGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { isSmsFlow = true; currentStep = SendStep.PHONE_ENTRY }.padding(12.dp)) {
+                                        Box(modifier = Modifier.size(56.dp).glassCard(CircleShape), contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Default.Message, contentDescription = null, tint = EmeraldGreen)
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("SMS Transfer", color = EmeraldGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(16.dp))
+                            }
+                        }
+
+                        // 🚀 THE FIX: The Tap to Pay Dedicated Radar UI
+                        SendStep.TAP_TO_PAY -> {
+                            Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Spacer(modifier = Modifier.weight(1f))
+
+                                val infiniteTransition = rememberInfiniteTransition(label = "radar")
+                                val rippleAlpha by infiniteTransition.animateFloat(
+                                    initialValue = 0.5f, targetValue = 0f,
+                                    animationSpec = infiniteRepeatable(tween(2000), RepeatMode.Restart), label = "alpha"
+                                )
+                                val rippleScale by infiniteTransition.animateFloat(
+                                    initialValue = 1f, targetValue = 2.5f,
+                                    animationSpec = infiniteRepeatable(tween(2000), RepeatMode.Restart), label = "scale"
+                                )
+
+                                Box(contentAlignment = Alignment.Center, modifier = Modifier.size(300.dp)) {
+                                    // Ripple Effect
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(CircleShape)
+                                            .border(2.dp, EmeraldGreen.copy(alpha = rippleAlpha), CircleShape)
+                                            .background(EmeraldGreen.copy(alpha = rippleAlpha * 0.2f))
+                                            .drawWithContent {
+                                                drawContent()
+                                                drawCircle(
+                                                    color = EmeraldGreen.copy(alpha = rippleAlpha),
+                                                    radius = size.width / 2 * rippleScale,
+                                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4f)
+                                                )
+                                            }
+                                    )
+
+                                    // Center Icon
+                                    Box(
+                                        modifier = Modifier.size(100.dp).glassCard(CircleShape).background(EmeraldGreen.copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Default.Nfc, contentDescription = "Tap", tint = EmeraldGreen, modifier = Modifier.size(48.dp))
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.weight(1f))
+                                Text("Hold near Receiver's Phone", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
+                                Text("Wait for the vibration...", color = SlateBlue, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
+                                Spacer(modifier = Modifier.height(48.dp))
+                            }
+                        }
+
+                        SendStep.PHONE_ENTRY -> {
+                            Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Spacer(modifier = Modifier.height(32.dp))
+                                Box(modifier = Modifier.size(72.dp).background(EmeraldGreen.copy(alpha = 0.1f), CircleShape), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.PhoneAndroid, null, tint = EmeraldGreen, modifier = Modifier.size(36.dp))
+                                }
+                                Spacer(modifier = Modifier.height(24.dp))
+                                Text("Receiver's Phone Number", color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("Enter number or pick from contacts", color = SlateBlue, fontSize = 14.sp)
+                                Spacer(modifier = Modifier.height(48.dp))
+
+                                OutlinedTextField(
+                                    value = phoneInput,
+                                    onValueChange = { newValue ->
+                                        val digitsOnly = newValue.filter { it.isDigit() }
+                                        if (digitsOnly.length <= 10) phoneInput = digitsOnly
+                                    },
+                                    textStyle = TextStyle(color = Color.White, fontSize = 24.sp, letterSpacing = 2.sp, textAlign = TextAlign.Center),
+                                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EmeraldGreen, unfocusedBorderColor = SlateBlue, cursorColor = EmeraldGreen),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                                    placeholder = { Text("00000 00000", color = SoftText, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
+                                    visualTransformation = PhoneVisualTransformation(),
+                                    trailingIcon = {
+                                        IconButton(onClick = {
+                                            val intent = Intent(Intent.ACTION_PICK, android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI)
+                                            contactPickerLauncher.launch(intent)
+                                        }) {
+                                            Icon(Icons.Default.AccountBox, contentDescription = "Contacts", tint = EmeraldGreen)
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+
+                                Spacer(modifier = Modifier.weight(1f))
+
+                                Button(
+                                    onClick = {
+                                        focusManager.clearFocus()
+                                        if (phoneInput.length == 10) {
+                                            scannedReceiverId = phoneInput
+                                            currentStep = SendStep.AMOUNT_ENTRY
+                                        }
+                                    },
+                                    enabled = phoneInput.length == 10,
+                                    modifier = Modifier.fillMaxWidth().height(60.dp),
+                                    shape = RoundedCornerShape(20.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreen, contentColor = Color.Black, disabledContainerColor = Color.White.copy(0.1f))
+                                ) {
+                                    Text("NEXT", fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+                                }
+                                Spacer(modifier = Modifier.height(16.dp))
+                            }
+                        }
+
+                        SendStep.AMOUNT_ENTRY -> {
                             val amountLong = amountText.toLongOrNull() ?: 0L
                             val isOverdraft = amountLong > totalBalance
                             val isZeroInvalid = amountText.isNotEmpty() && amountLong <= 0L
                             val hasError = isOverdraft || isZeroInvalid
                             val canAuthorize = amountText.isNotEmpty() && !hasError
 
-                            // 💡 DYNAMIC COLOR ANIMATIONS
                             val animatedBgColor = animateColorAsState(targetValue = if (canAuthorize) EmeraldGreen else Color.White.copy(alpha = 0.05f), animationSpec = tween(400), label = "bg").value
                             val animatedTextColor = animateColorAsState(targetValue = if (canAuthorize) Color(0xFF020617) else Color.White.copy(alpha = 0.3f), animationSpec = tween(400), label = "txt").value
                             val animatedIconScale = animateFloatAsState(targetValue = if (canAuthorize) 1.2f else 1.0f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "icon").value
 
-                            Column(
-                                modifier = Modifier.fillMaxSize(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                // 👤 Receiver Identification Card
+                            Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Box(modifier = Modifier.fillMaxWidth().glassCard(RoundedCornerShape(16.dp)).padding(16.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Box(modifier = Modifier.size(42.dp).background(EmeraldGreen.copy(alpha = 0.1f), CircleShape), contentAlignment = Alignment.Center) {
@@ -529,12 +634,9 @@ fun SendPaymentScreen(
                                 }
 
                                 Spacer(modifier = Modifier.height(32.dp))
-
-                                // 💰 Dynamic Amount Display
                                 Text("Enter Amount", color = SlateBlue, fontSize = 14.sp)
                                 Spacer(modifier = Modifier.height(16.dp))
 
-                                // ⌨️ NATIVE KEYBOARD IMPLEMENTATION
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("₢", fontSize = 32.sp, color = if(amountText.isEmpty()) Color.White.copy(alpha = 0.2f) else Color.White, fontWeight = FontWeight.Bold)
                                     Spacer(Modifier.width(8.dp))
@@ -543,40 +645,17 @@ fun SendPaymentScreen(
                                         value = amountText,
                                         onValueChange = { newValue ->
                                             val filtered = newValue.filter { it.isDigit() }
-                                            if (filtered.length <= 6) {
-                                                amountText = filtered
-                                            }
+                                            if (filtered.length <= 6) amountText = filtered
                                         },
-                                        keyboardOptions = KeyboardOptions(
-                                            keyboardType = KeyboardType.NumberPassword, // Hides text suggestion bar
-                                            imeAction = ImeAction.Done
-                                        ),
-                                        keyboardActions = KeyboardActions(
-                                            onDone = { focusManager.clearFocus() }
-                                        ),
-                                        textStyle = TextStyle(
-                                            fontSize = 56.sp,
-                                            fontWeight = FontWeight.Black,
-                                            fontFamily = FontFamily.Monospace,
-                                            color = if (hasError) RoseError else Color.White,
-                                            letterSpacing = (-2).sp
-                                        ),
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+                                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                                        textStyle = TextStyle(fontSize = 56.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = if (hasError) RoseError else Color.White, letterSpacing = (-2).sp),
                                         cursorBrush = SolidColor(EmeraldGreen),
-                                        modifier = Modifier
-                                            .width(IntrinsicSize.Min)
-                                            .defaultMinSize(minWidth = 50.dp)
-                                            .focusRequester(amountFocusRequester),
+                                        modifier = Modifier.width(IntrinsicSize.Min).defaultMinSize(minWidth = 50.dp).focusRequester(amountFocusRequester),
                                         decorationBox = { innerTextField ->
                                             Box {
                                                 if (amountText.isEmpty()) {
-                                                    Text(
-                                                        text = "0",
-                                                        fontSize = 56.sp,
-                                                        fontWeight = FontWeight.Black,
-                                                        fontFamily = FontFamily.Monospace,
-                                                        color = Color.White.copy(alpha = 0.2f),
-                                                        letterSpacing = (-2).sp
-                                                    )
+                                                    Text("0", fontSize = 56.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = Color.White.copy(alpha = 0.2f), letterSpacing = (-2).sp)
                                                 }
                                                 innerTextField()
                                             }
@@ -584,20 +663,15 @@ fun SendPaymentScreen(
                                     )
                                 }
 
-                                // Validation Messaging
                                 val helperText = when {
                                     isOverdraft -> "Insufficient credits. Available: ₢$totalBalance"
                                     isZeroInvalid -> "Amount must be greater than zero"
                                     else -> "Available Credits: ₢$totalBalance"
                                 }
-                                Text(
-                                    text = helperText,
-                                    color = if (hasError) RoseError else SlateBlue,
-                                    fontSize = 13.sp,
-                                    modifier = Modifier.padding(top = 8.dp)
-                                )
+                                Text(text = helperText, color = if (hasError) RoseError else SlateBlue, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
 
-                                if (state is PaymentUiState.Failure) {
+                                val failureState = state as? PaymentUiState.Failure
+                                if (failureState != null) {
                                     Spacer(modifier = Modifier.height(16.dp))
                                     Row(
                                         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(RoseError.copy(alpha = 0.1f)).padding(12.dp),
@@ -605,31 +679,25 @@ fun SendPaymentScreen(
                                     ) {
                                         Icon(Icons.Default.ErrorOutline, null, tint = RoseError, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text(state.reason, color = RoseError, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                        Text(failureState.reason, color = RoseError, fontWeight = FontWeight.Medium, fontSize = 13.sp)
                                     }
                                 }
 
                                 Spacer(modifier = Modifier.weight(1f))
 
-                                // 🚀 BIOMETRIC AUTHORIZE BUTTON
                                 Button(
                                     onClick = {
-                                        focusManager.clearFocus() // Hide keyboard when authorizing
+                                        focusManager.clearFocus()
                                         if (canAuthorize) {
-                                            // 🛡️ Explicitly request SMS permission BEFORE Biometrics
-                                            if (isSmsFlow && !smsPermissionState.status.isGranted) {
-                                                smsPermissionState.launchPermissionRequest()
+                                            if (isSmsFlow && !smsPermissionState.allPermissionsGranted) {
+                                                smsPermissionState.launchMultiplePermissionRequest()
                                             } else {
                                                 promptBiometricAuth(
-                                                    context = context,
-                                                    amount = amountText,
+                                                    context = context, amount = amountText,
                                                     onSuccess = {
                                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                        if (isSmsFlow) {
-                                                            viewModel.sendSmsPayment(context, scannedReceiverId, amountLong)
-                                                        } else {
-                                                            viewModel.startTargetedDiscovery(scannedReceiverId, amountLong)
-                                                        }
+                                                        if (isSmsFlow) viewModel.sendSmsPayment(context, scannedReceiverId, amountLong)
+                                                        else viewModel.startTargetedDiscovery(scannedReceiverId, amountLong)
                                                     },
                                                     onError = { }
                                                 )
@@ -639,107 +707,13 @@ fun SendPaymentScreen(
                                     enabled = canAuthorize,
                                     modifier = Modifier.fillMaxWidth().height(60.dp),
                                     shape = RoundedCornerShape(20.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = animatedBgColor,
-                                        contentColor = animatedTextColor,
-                                        disabledContainerColor = Color.White.copy(alpha = 0.05f),
-                                        disabledContentColor = Color.White.copy(alpha = 0.3f)
-                                    )
+                                    colors = ButtonDefaults.buttonColors(containerColor = animatedBgColor, contentColor = animatedTextColor, disabledContainerColor = Color.White.copy(alpha = 0.05f), disabledContentColor = Color.White.copy(alpha = 0.3f))
                                 ) {
-                                    Icon(
-                                        imageVector = if (isSecureDevice) Icons.Default.Fingerprint else Icons.Default.Shield,
-                                        contentDescription = null,
-                                        modifier = Modifier.size((20 * animatedIconScale).dp)
-                                    )
+                                    Icon(imageVector = if (isSecureDevice) Icons.Default.Fingerprint else Icons.Default.Shield, contentDescription = null, modifier = Modifier.size((20 * animatedIconScale).dp))
                                     Spacer(Modifier.width(8.dp))
                                     Text(if (isOverdraft) "NO FUNDS" else "AUTHORIZE", fontWeight = FontWeight.Black, letterSpacing = 1.sp)
                                 }
-
                                 Spacer(modifier = Modifier.height(16.dp))
-                            }
-                        }
-
-                        is PaymentUiState.SmsSending -> {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                CircularProgressIndicator(modifier = Modifier.size(64.dp), color = EmeraldGreen, strokeWidth = 4.dp)
-                                Spacer(modifier = Modifier.height(32.dp))
-                                Text("Dispatching Secure SMS...", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
-                                Text("Sending encrypted payload via cellular network.\nPlease wait.", color = SoftText, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp, start = 32.dp, end = 32.dp))
-                                Spacer(modifier = Modifier.height(48.dp))
-                            }
-                        }
-
-                        is PaymentUiState.Processing -> {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                CircularProgressIndicator(modifier = Modifier.size(64.dp), color = EmeraldGreen, strokeWidth = 4.dp)
-                                Spacer(modifier = Modifier.height(32.dp))
-                                Text("Securing Connection...", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
-                                Text("Transferring funds over offline protocol.\nPlease keep devices close.", color = SoftText, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp, start = 32.dp, end = 32.dp))
-                                Spacer(modifier = Modifier.height(48.dp))
-                                TextButton(onClick = { viewModel.stopOfflineMode() }) {
-                                    Text("Cancel Transfer", color = RoseError)
-                                }
-                            }
-                        }
-
-                        is PaymentUiState.Success -> {
-                            LaunchedEffect(Unit) {
-                                val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    val timings = longArrayOf(0, 50, 100, 50, 150, 200)
-                                    val amplitudes = intArrayOf(0, 100, 0, 100, 0, 255)
-                                    vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
-                                } else {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                }
-                            }
-
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                Box(
-                                    modifier = Modifier.size(100.dp).glassCard(CircleShape).background(EmeraldGreen.copy(alpha = 0.2f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(Icons.Default.Check, contentDescription = "Success", tint = EmeraldGreen, modifier = Modifier.size(50.dp))
-                                }
-
-                                Spacer(modifier = Modifier.height(24.dp))
-                                Text("Transfer Successful", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp)
-                                Text("Funds delivered securely.", color = EmeraldGreen, fontSize = 14.sp)
-                                Spacer(modifier = Modifier.height(40.dp))
-
-                                Column(modifier = Modifier.fillMaxWidth().glassCard().padding(24.dp)) {
-                                    ReceiptRow("Amount Sent", "₢$amountText", isBold = true, valueColor = EmeraldGreen)
-                                    HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp), color = Color.White.copy(alpha = 0.1f))
-                                    val timeFormat = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
-                                    ReceiptRow("Time", timeFormat.format(Date()))
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    ReceiptRow("TX Hash", state.txHash.take(12).uppercase() + "...")
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    ReceiptRow("Method", if (isSmsFlow) "Cellular SMS" else "Offline Node", valueColor = EmeraldGreen)
-                                }
-
-                                Spacer(modifier = Modifier.weight(1f))
-
-                                Button(
-                                    onClick = { handleBackAction() }, // 💡 Uses unified logic
-                                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                                    shape = RoundedCornerShape(16.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
-                                ) {
-                                    Text("Done", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                                }
                             }
                         }
                     }
@@ -749,10 +723,146 @@ fun SendPaymentScreen(
     }
 }
 
+// -------------------------------------------------------------
+// 🚀 THE FIX: Modern Glassmorphism Receipt View
+// -------------------------------------------------------------
+
 @Composable
-private fun ReceiptRow(label: String, value: String, isBold: Boolean = false, valueColor: Color = Color.White) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+fun ReceiptView(
+    amount: String,
+    txHash: String,
+    isSmsFlow: Boolean,
+    onDone: () -> Unit
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+
+    LaunchedEffect(Unit) {
+        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val timings = longArrayOf(0, 50, 100, 50, 150, 200)
+            val amplitudes = intArrayOf(0, 100, 0, 100, 0, 255)
+            vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
+        } else {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxSize().padding(24.dp)
+    ) {
+        // Top Spacer vertically centers the ticket content
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Large Success Icon
+        Box(
+            modifier = Modifier.size(88.dp).glassCard(CircleShape).background(EmeraldGreen.copy(alpha = 0.2f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.Check, contentDescription = "Success", tint = EmeraldGreen, modifier = Modifier.size(44.dp))
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        Text("Transfer Successful", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 28.sp)
+        Text("Funds delivered securely.", color = EmeraldGreen, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+        Spacer(modifier = Modifier.height(40.dp))
+
+        // Modern Glass Ticket Container
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .glassCard(RoundedCornerShape(20.dp))
+                .background(Color.White.copy(alpha = 0.03f))
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                ReceiptRow("Amount Sent", "₢$amount", isBold = true, valueColor = EmeraldGreen, valueSize = 24.sp)
+            }
+
+            // Elegant Dashed Line Separator
+            Canvas(Modifier.fillMaxWidth().height(1.dp)) {
+                drawLine(
+                    color = Color.White.copy(alpha = 0.2f),
+                    start = Offset(0f, 0f),
+                    end = Offset(size.width, 0f),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 15f), 0f)
+                )
+            }
+
+            Column(modifier = Modifier.padding(24.dp)) {
+                val timeFormat = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()) }
+                ReceiptRow("Time", timeFormat.format(Date()))
+                Spacer(modifier = Modifier.height(16.dp))
+                ReceiptRow("TX Hash", txHash.take(12).uppercase() + "...")
+                Spacer(modifier = Modifier.height(16.dp))
+                ReceiptRow("Method", if (isSmsFlow) "Cellular SMS" else "Offline Node", valueColor = EmeraldGreen)
+            }
+        }
+
+        // Bottom Spacer pushes the Done button flush to the bottom
+        Spacer(modifier = Modifier.weight(1.5f))
+
+        Button(
+            onClick = onDone,
+            modifier = Modifier.fillMaxWidth().height(60.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
+        ) {
+            Text("Done", fontSize = 18.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+fun ProcessingView(title: String, subtitle: String, onCancel: (() -> Unit)?) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier.fillMaxSize()
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(64.dp), color = EmeraldGreen, strokeWidth = 4.dp)
+        Spacer(modifier = Modifier.height(32.dp))
+        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
+        Text(subtitle, color = SoftText, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp, start = 32.dp, end = 32.dp))
+        Spacer(modifier = Modifier.height(48.dp))
+        if (onCancel != null) {
+            TextButton(onClick = onCancel) {
+                Text("Cancel Transfer", color = RoseError)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReceiptRow(label: String, value: String, isBold: Boolean = false, valueColor: Color = Color.White, valueSize: TextUnit = 14.sp) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Text(text = label, color = SoftText, fontSize = if (isBold) 16.sp else 14.sp)
-        Text(text = value, color = valueColor, fontWeight = if (isBold) FontWeight.Black else FontWeight.Medium, fontSize = if (isBold) 18.sp else 14.sp)
+        Text(text = value, color = valueColor, fontWeight = if (isBold) FontWeight.Black else FontWeight.Medium, fontSize = valueSize)
+    }
+}
+
+class PhoneVisualTransformation : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val trimmed = if (text.text.length >= 10) text.text.substring(0..9) else text.text
+        var out = ""
+        for (i in trimmed.indices) {
+            out += trimmed[i]
+            if (i == 4) out += " "
+        }
+
+        val numberOffsetTranslator = object : OffsetMapping {
+            override fun originalToTransformed(offset: Int): Int {
+                if (offset <= 4) return offset
+                if (offset <= 10) return offset + 1
+                return 11
+            }
+            override fun transformedToOriginal(offset: Int): Int {
+                if (offset <= 5) return offset
+                if (offset <= 11) return offset - 1
+                return 10
+            }
+        }
+        return TransformedText(AnnotatedString(out), numberOffsetTranslator)
     }
 }

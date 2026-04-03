@@ -1,9 +1,16 @@
 package com.paysetu.app.data.p2p
 
+import android.Manifest
+import android.bluetooth.BluetoothManager
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.core.app.ActivityCompat
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
 
@@ -11,58 +18,141 @@ class P2PTransferManager(private val context: Context) {
 
     private val connectionsClient = Nearby.getConnectionsClient(context)
     private val serviceId = "com.paysetu.app.OFFLINE_PAYMENT"
-
-    // Using P2P_STAR ensures better compatibility across different Android versions
-    // and prevents the Wi-Fi Direct socket lockup seen in P2P_POINT_TO_POINT on Xiaomi devices.
     private val STRATEGY = Strategy.P2P_STAR
 
-    fun startBroadcasting(userName: String, onPayloadReceived: (String) -> Unit) {
-        // 🛡️ Always clean state before starting
-        stopAll()
+    // 🚀 PROXIMITY CONFIG: -45 is robust for most phones with cases.
+    // Touching usually hits -30 to -40.
+    private val TAP_RSSI_THRESHOLD = -45
 
-        val advertisingOptions = AdvertisingOptions.Builder()
-            .setStrategy(STRATEGY)
-            .build()
+    private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+    private val bleScanner = bluetoothManager?.adapter?.bluetoothLeScanner
+    private var bleScanCallback: ScanCallback? = null
+
+    /**
+     * RECEIVE MODE: Called when user clicks "Receive".
+     * Starts the beacon so others can find this device via QR or Tap.
+     */
+    fun startBroadcasting(userName: String, onPayloadReceived: (String) -> Unit) {
+        stopAll()
+        val advertisingOptions = AdvertisingOptions.Builder().setStrategy(STRATEGY).build()
 
         connectionsClient.startAdvertising(
-            userName,
-            serviceId,
-            createConnectionLifecycleCallback(onPayloadReceived),
-            advertisingOptions
+            userName, serviceId, createConnectionLifecycleCallback(onPayloadReceived), advertisingOptions
         ).addOnSuccessListener {
-            Log.d("PaySetu_P2P", "Broadcasting as $userName...")
+            Log.d("PaySetu_P2P", "Broadcasting Beacon: $userName")
         }.addOnFailureListener { e ->
             Log.e("PaySetu_P2P", "Broadcasting failed", e)
         }
     }
 
+    /**
+     * QR PATH: Standard long-range discovery.
+     * Only starts the Nearby Radio. BLE Tap Radar remains OFF.
+     */
     fun startDiscovering(onEndpointFound: (String, String) -> Unit) {
-        // 🛡️ Always clean state before starting
         stopAll()
-
-        val discoveryOptions = DiscoveryOptions.Builder()
-            .setStrategy(STRATEGY)
-            .build()
+        val discoveryOptions = DiscoveryOptions.Builder().setStrategy(STRATEGY).build()
 
         connectionsClient.startDiscovery(
             serviceId,
             object : EndpointDiscoveryCallback() {
                 override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-                    Log.d("PaySetu_P2P", "Found Receiver: ${info.endpointName}")
+                    Log.d("PaySetu_P2P", "Nearby Found (Long Range): ${info.endpointName}")
                     onEndpointFound(endpointId, info.endpointName)
                 }
                 override fun onEndpointLost(endpointId: String) {}
             },
             discoveryOptions
         ).addOnSuccessListener {
-            Log.d("PaySetu_P2P", "Discovery started...")
-        }.addOnFailureListener { e ->
-            Log.e("PaySetu_P2P", "Discovery failed", e)
+            Log.d("PaySetu_P2P", "Standard Discovery Active (BLE Tap Radar is OFF)")
+        }
+    }
+
+    /**
+     * TAP PATH: High-precision proximity discovery.
+     * Starts both Nearby Radio and the BLE Tap Radar.
+     */
+    fun startTapDiscovery(onTapDetected: (String) -> Unit) {
+        stopAll()
+        val discoveryOptions = DiscoveryOptions.Builder().setStrategy(STRATEGY).build()
+
+        // 1. Start Nearby Discovery to resolve names
+        connectionsClient.startDiscovery(
+            serviceId,
+            object : EndpointDiscoveryCallback() {
+                override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
+                    val name = info.endpointName
+                    // 🚀 HYBRID FIX: If Nearby discovers the node while in "Tap Mode",
+                    // treat it as a successful proximity handshake.
+                    if (name.startsWith("SETU-")) {
+                        Log.d("PaySetu_P2P", "Proximity target resolved via Nearby: $name")
+
+                        // 🛡️ HARDWARE SAFETY: Force kill radios immediately to prevent locking
+                        stopAll()
+
+                        onTapDetected(name)
+                    }
+                }
+                override fun onEndpointLost(endpointId: String) {}
+            },
+            discoveryOptions
+        ).addOnSuccessListener {
+            // 2. Start the BLE Signal Strength Radar for the 2cm "Thump"
+            startBleTapScanner(onTapDetected)
+        }
+    }
+
+    private fun startBleTapScanner(onTapDetected: (String) -> Unit) {
+        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) return
+
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY) // 🚀 Fast as possible
+            .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+            .build()
+
+        bleScanCallback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                val rssi = result.rssi
+                val deviceName = try {
+                    result.scanRecord?.deviceName ?: result.device?.name
+                } catch (e: SecurityException) { null }
+
+                if (deviceName?.startsWith("SETU-") == true) {
+                    // 💥 PHYSICAL TAP DETECTED
+                    if (rssi >= TAP_RSSI_THRESHOLD) {
+                        Log.i("PaySetu_P2P", "💥 TAP SUCCESS! RSSI: $rssi | ID: $deviceName")
+
+                        // 🛡️ HARDWARE SAFETY: Force kill radios immediately to prevent locking
+                        stopAll()
+
+                        onTapDetected(deviceName)
+                    }
+                }
+            }
+        }
+
+        try {
+            bleScanner?.startScan(null, settings, bleScanCallback)
+            Log.d("PaySetu_P2P", "BLE Radar active (Threshold: $TAP_RSSI_THRESHOLD)")
+        } catch (e: Exception) {
+            Log.e("PaySetu_P2P", "BLE Scanner failed", e)
+        }
+    }
+
+    private fun stopBleTapScanner() {
+        try {
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+                bleScanCallback?.let { bleScanner?.stopScan(it) }
+            }
+            bleScanCallback = null
+        } catch (e: Exception) {
+            Log.e("PaySetu_P2P", "Error stopping BLE scanner", e)
         }
     }
 
     fun stopDiscovery() {
         connectionsClient.stopDiscovery()
+        stopBleTapScanner()
         Log.d("PaySetu_P2P", "Discovery stopped.")
     }
 
@@ -72,7 +162,7 @@ class P2PTransferManager(private val context: Context) {
         onDeliveryConfirmed: () -> Unit,
         onFailure: (String) -> Unit
     ) {
-        Log.d("PaySetu_P2P", "Attempting to connect to $endpointId")
+        Log.d("PaySetu_P2P", "Attempting connection to $endpointId")
 
         connectionsClient.requestConnection(
             "PaySetu_Sender",
@@ -81,13 +171,12 @@ class P2PTransferManager(private val context: Context) {
                 override fun onConnectionInitiated(id: String, info: ConnectionInfo) {
                     connectionsClient.acceptConnection(id, object : PayloadCallback() {
                         override fun onPayloadReceived(id: String, payload: Payload) {}
-
                         override fun onPayloadTransferUpdate(id: String, update: PayloadTransferUpdate) {
                             if (update.status == PayloadTransferUpdate.Status.SUCCESS) {
                                 Log.d("PaySetu_P2P", "Hardware Delivery Confirmed!")
                                 onDeliveryConfirmed()
                             } else if (update.status == PayloadTransferUpdate.Status.FAILURE) {
-                                Log.e("PaySetu_P2P", "Payload transfer failed during upload")
+                                Log.e("PaySetu_P2P", "Payload transfer failed")
                                 onFailure("Radio transfer failed")
                             }
                         }
@@ -107,7 +196,7 @@ class P2PTransferManager(private val context: Context) {
                             }
                         }, 250)
                     } else {
-                        Log.e("PaySetu_P2P", "Connection rejected/failed: ${result.status.statusCode}")
+                        Log.e("PaySetu_P2P", "Connection rejected: ${result.status.statusCode}")
                         onFailure("Connection rejected by receiver")
                     }
                 }
@@ -118,7 +207,6 @@ class P2PTransferManager(private val context: Context) {
             }
         ).addOnFailureListener { e ->
             if (e.message?.contains("8003") == true || e.message?.contains("ALREADY_CONNECTED") == true) {
-                Log.d("PaySetu_P2P", "Already connected. Firing payload directly.")
                 val payload = Payload.fromBytes(payloadData.toByteArray(Charsets.UTF_8))
                 connectionsClient.sendPayload(endpointId, payload)
                 onDeliveryConfirmed()
@@ -132,18 +220,13 @@ class P2PTransferManager(private val context: Context) {
     private fun createConnectionLifecycleCallback(onReceived: (String) -> Unit) =
         object : ConnectionLifecycleCallback() {
             override fun onConnectionInitiated(id: String, info: ConnectionInfo) {
-                Log.d("PaySetu_P2P", "Incoming connection. Accepting...")
                 connectionsClient.acceptConnection(id, createPayloadCallback(onReceived))
             }
-
             override fun onConnectionResult(id: String, result: ConnectionResolution) {
                 if (result.status.isSuccess) {
                     Log.d("PaySetu_P2P", "Connection established with $id")
-                } else {
-                    Log.e("PaySetu_P2P", "Receiver connection failed: ${result.status.statusCode}")
                 }
             }
-
             override fun onDisconnected(id: String) {
                 Log.d("PaySetu_P2P", "Connection lost with $id")
             }
@@ -158,16 +241,15 @@ class P2PTransferManager(private val context: Context) {
                     onReceived(dataString)
                 }
             }
-
             override fun onPayloadTransferUpdate(id: String, update: PayloadTransferUpdate) {}
         }
 
-    // 🛡️ FIX: Hard Reset to clear Zombie Sockets
     fun stopAll() {
         try {
             connectionsClient.stopDiscovery()
             connectionsClient.stopAdvertising()
             connectionsClient.stopAllEndpoints()
+            stopBleTapScanner() // 🛡️ Ensure BLE shuts down too
             Log.d("PaySetu_P2P", "Radios hard reset.")
         } catch (e: Exception) {
             Log.e("PaySetu_P2P", "Error shutting down radios", e)

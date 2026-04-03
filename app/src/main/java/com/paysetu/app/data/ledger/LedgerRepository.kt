@@ -51,10 +51,10 @@ class LedgerRepository(
     }
 
     /**
-     * ✅ PHASE 10: Backend Arbiter Override
-     * Updates a transaction status locally based on backend sync results.
+     * ✅ PHASE 10: Backend Arbiter Override & Phase 17 ACK Updates
+     * Updates a transaction status locally based on backend sync or SMS ACK.
      */
-    suspend fun updateStatus(txHash: ByteArray, newStatus: TransactionStatus) {
+    suspend fun updateTransactionStatus(txHash: ByteArray, newStatus: TransactionStatus) { // 💡 Renamed to match ViewModel!
         ledgerDao.updateTransactionStatus(txHash, newStatus)
     }
 

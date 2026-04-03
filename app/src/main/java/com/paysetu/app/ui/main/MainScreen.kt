@@ -26,7 +26,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache // 💡 ADDED: For memory optimization
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.nativeCanvas
@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay // 💡 ADDED: For animation reset
 import com.paysetu.app.data.ledger.LedgerRepository
 import com.paysetu.app.data.ledger.entity.TransactionDirection
 import com.paysetu.app.ui.components.TransactionItem
@@ -43,36 +44,73 @@ import com.paysetu.app.ui.payment.AddFundsScreen
 import com.paysetu.app.ui.payment.PaymentViewModel
 import com.paysetu.app.ui.payment.ReceivePaymentScreen
 import com.paysetu.app.ui.payment.SendPaymentScreen
-import com.paysetu.app.ui.common.PermissionGate // 🛡️ ADDED: Permission Gate Import
+import com.paysetu.app.ui.common.PermissionGate
 
-// 💎 REFINED MONOCHROME + EMERALD PALETTE
 val DeepSlateGradient = Brush.verticalGradient(listOf(Color(0xFF0F172A), Color(0xFF020617)))
 val EmeraldGreen = Color(0xFF10B981)
 val SlateBlue = Color(0xFF94A3B8)
 val SoftText = Color.White.copy(alpha = 0.7f)
 
-// 💎 RELIABLE, CRISP GLASSMORPHISM (Updated to 0.5dp depth)
 fun Modifier.crispGlass(shape: RoundedCornerShape = RoundedCornerShape(24.dp)) = this
     .clip(shape)
     .background(Color.White.copy(alpha = 0.05f))
-    .border(0.5.dp, Color.White.copy(alpha = 0.12f), shape) // 💡 0.5dp subtle depth
+    .border(0.5.dp, Color.White.copy(alpha = 0.12f), shape)
 
-// 💡 PREMIUM UTILITY: NEON GLOW (FIXED)
-fun Modifier.neonGlow(color: Color) = this.drawBehind {
+// 💡 THE FIX: Use drawWithCache to allocate the Paint object EXACTLY ONCE.
+// This stops the Garbage Collector from suffocating the RenderThread.
+fun Modifier.neonGlow(color: Color) = this.drawWithCache {
     val radius = 40.dp.toPx()
-    drawContext.canvas.nativeCanvas.apply {
-        val paint = android.graphics.Paint().apply {
-            isAntiAlias = true
-            this.color = android.graphics.Color.TRANSPARENT
-            // 💡 FIXED: Removed "radius =" named argument
-            setShadowLayer(radius, 0f, 0f, color.toArgb())
-        }
-        // Draw a faint circle behind the text to create the "bloom" effect
-        drawCircle(
+    val paint = android.graphics.Paint().apply {
+        isAntiAlias = true
+        this.color = android.graphics.Color.TRANSPARENT
+        setShadowLayer(radius, 0f, 0f, color.toArgb())
+    }
+
+    onDrawBehind {
+        drawContext.canvas.nativeCanvas.drawCircle(
             center.x,
             center.y,
             radius / 2f,
             paint
+        )
+    }
+}
+
+// 💡 THE FIX: Isolated the infinite animation into its own Composable.
+// Now, only this tiny row recomposes 60 times a second, instead of the entire app UI.
+@Composable
+fun IntegrityBadge(isVerified: Boolean) {
+    val infiniteTransition = rememberInfiniteTransition(label = "securityPulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (isVerified) EmeraldGreen.copy(alpha = 0.10f) else Color(0xFFF43F5E).copy(alpha = 0.10f))
+            .border(1.dp, if (isVerified) EmeraldGreen.copy(alpha = 0.2f) else Color(0xFFF43F5E).copy(alpha = 0.2f), RoundedCornerShape(50))
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+    ) {
+        Icon(
+            imageVector = if (isVerified) Icons.Default.Shield else Icons.Default.Warning,
+            contentDescription = null,
+            tint = if (isVerified) EmeraldGreen.copy(alpha = pulseAlpha) else Color(0xFFF43F5E),
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = if (isVerified) "Secured by Hardware" else "Integrity Compromised",
+            fontSize = 12.sp,
+            color = if (isVerified) EmeraldGreen else Color(0xFFF43F5E),
+            fontWeight = FontWeight.SemiBold
         )
     }
 }
@@ -89,40 +127,30 @@ fun MainScreen(
     val history by paymentViewModel.ledgerHistory.collectAsState()
     val isVerified by paymentViewModel.isLedgerIntact.collectAsState()
 
-    val infiniteTransition = rememberInfiniteTransition(label = "securityPulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseAlpha"
-    )
-
     val targetBalance = remember(history) {
         history.sumOf {
             if (it.direction == TransactionDirection.INCOMING) it.amount else -it.amount
         }
     }
 
-    // 💡 THE NUMBER TICKER (Rolls up to total balance)
     var triggerAnimation by remember { mutableStateOf(false) }
+
+    // 💡 THE FIX: Added a tiny delay. Compose state batches updates, so setting
+    // false then true immediately in the same frame gets ignored.
     LaunchedEffect(currentScreen) {
         if (currentScreen == "HOME") {
-            triggerAnimation = false // Reset
-            triggerAnimation = true  // Trigger
+            triggerAnimation = false
+            delay(50)
+            triggerAnimation = true
         }
     }
 
-    // 💡 FIXED: Using direct state assignment instead of 'by' delegate to prevent Android Studio scope bugs
     val animatedBalanceState = animateFloatAsState(
         targetValue = if (triggerAnimation) targetBalance.toFloat() else 0f,
         animationSpec = tween(durationMillis = 1500, easing = FastOutSlowInEasing),
         label = "balanceAnimation"
     )
 
-    // 💎 STABLE RADIO LIFECYCLE
     LaunchedEffect(currentScreen) {
         when (currentScreen) {
             "RECEIVE" -> {
@@ -130,12 +158,9 @@ fun MainScreen(
                 paymentViewModel.startReceivingOffline()
             }
             "SEND" -> {
-                // 💡 Intentional No-Op: SendScreen manages its own P2P lifecycle dynamically
-                // based on scanning vs authorizing. We don't interfere here.
                 Log.d("PaySetu_UI", "Entering Send Mode...")
             }
             else -> {
-                // For HOME, LEDGER, ADD_FUNDS
                 Log.d("PaySetu_UI", "Entering Safe Mode. Terminating active radios.")
                 paymentViewModel.stopOfflineMode()
             }
@@ -175,7 +200,6 @@ fun MainScreen(
                     ) {
                         item { Spacer(modifier = Modifier.height(4.dp)) }
 
-                        // 💎 1. REFINED BALANCE CARD
                         item {
                             Column(
                                 modifier = Modifier
@@ -187,20 +211,17 @@ fun MainScreen(
                                 Text("Total Balance", style = MaterialTheme.typography.titleMedium, color = SlateBlue)
                                 Spacer(modifier = Modifier.height(8.dp))
 
-                                // 💡 Clean Balance Typography with NEON GLOW
-                                // 💡 FIXED: Accessing .value explicitly
                                 Text(
                                     text = "₢${animatedBalanceState.value.toLong()}",
-                                    modifier = Modifier.neonGlow(EmeraldGreen.copy(alpha = 0.15f)), // 💡 Soft Emerald Bloom
+                                    modifier = Modifier.neonGlow(EmeraldGreen.copy(alpha = 0.15f)),
                                     fontSize = 64.sp,
-                                    fontWeight = FontWeight.Medium, // Lighter weight, larger size
+                                    fontWeight = FontWeight.Medium,
                                     letterSpacing = (-1.5).sp,
                                     color = Color.White
                                 )
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
-                                // 💡 Integrated Pill Button
                                 Button(
                                     onClick = { currentScreen = "ADD_FUNDS" },
                                     shape = CircleShape,
@@ -218,33 +239,12 @@ fun MainScreen(
 
                                 Spacer(modifier = Modifier.height(24.dp))
 
-                                // 🛡️ INTEGRITY BADGE
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(50))
-                                        .background(if (isVerified) EmeraldGreen.copy(alpha = 0.10f) else Color(0xFFF43F5E).copy(alpha = 0.10f))
-                                        .border(1.dp, if (isVerified) EmeraldGreen.copy(alpha = 0.2f) else Color(0xFFF43F5E).copy(alpha = 0.2f), RoundedCornerShape(50))
-                                        .padding(horizontal = 14.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (isVerified) Icons.Default.Shield else Icons.Default.Warning,
-                                        contentDescription = null,
-                                        tint = if (isVerified) EmeraldGreen.copy(alpha = pulseAlpha) else Color(0xFFF43F5E),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isVerified) "Secured by Hardware" else "Integrity Compromised",
-                                        fontSize = 12.sp,
-                                        color = if (isVerified) EmeraldGreen else Color(0xFFF43F5E),
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
+                                // 💡 THE FIX: Replaced the massive inline animation block
+                                // with our heavily optimized isolated composable.
+                                IntegrityBadge(isVerified = isVerified)
                             }
                         }
 
-                        // 2. DASHBOARD WIDGETS (With Data Viz)
                         item {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                                 val trustColor = if (uiState.trustScore >= 90) EmeraldGreen else if (uiState.trustScore >= 50) Color(0xFFFACC15) else Color(0xFFF43F5E)
@@ -257,13 +257,11 @@ fun MainScreen(
                             }
                         }
 
-                        // 3. MAIN ACTION BUTTONS
                         item {
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
-                                // 🟢 Solid Send Button (Primary)
                                 Button(
                                     onClick = { currentScreen = "SEND" },
                                     modifier = Modifier.weight(1f).height(64.dp),
@@ -281,12 +279,11 @@ fun MainScreen(
                                     Text("Send", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                                 }
 
-                                // ⚪ Glass Receive Button (Secondary - Updated with 0.5dp border)
                                 Button(
                                     onClick = { currentScreen = "RECEIVE" },
                                     modifier = Modifier.weight(1f).height(64.dp),
                                     shape = RoundedCornerShape(20.dp),
-                                    border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.15f)), // 💡 Kept consistent depth
+                                    border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.15f)),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = Color.White.copy(alpha = 0.05f),
                                         contentColor = Color.White
@@ -297,7 +294,6 @@ fun MainScreen(
                             }
                         }
 
-                        // 4. 📜 RECENT ACTIVITY HEADER
                         item {
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
@@ -321,7 +317,12 @@ fun MainScreen(
                                 }
                             }
                         } else {
-                            items(history.take(10)) { transaction ->
+                            // 💡 THE FIX: Adding a key prevents the list from brutally recomposing
+                            // every time items shift.
+                            items(
+                                items = history.take(10),
+                                key = { it.hashCode() }
+                            ) { transaction ->
                                 TransactionItem(transaction = transaction)
                             }
                         }
@@ -332,7 +333,6 @@ fun MainScreen(
             }
         }
 
-        // 🛡️ WRAPPED IN PERMISSION GATE
         "SEND" -> {
             PermissionGate {
                 SendPaymentScreen(
@@ -342,7 +342,6 @@ fun MainScreen(
             }
         }
 
-        // 🛡️ WRAPPED IN PERMISSION GATE
         "RECEIVE" -> {
             PermissionGate {
                 ReceivePaymentScreen(
@@ -370,8 +369,6 @@ fun MainScreen(
     }
 }
 
-// --- SUB-COMPOSABLES ---
-
 @Composable
 fun DashboardWidget(label: String, value: String, valueColor: Color, bgIcon: ImageVector) {
     Box(
@@ -380,7 +377,6 @@ fun DashboardWidget(label: String, value: String, valueColor: Color, bgIcon: Ima
             .crispGlass(RoundedCornerShape(20.dp))
             .height(100.dp)
     ) {
-        // 💡 DATA VISUALIZATION: Faint background icon
         Icon(
             imageVector = bgIcon,
             contentDescription = null,

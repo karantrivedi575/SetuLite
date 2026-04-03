@@ -16,6 +16,7 @@ import com.paysetu.app.domain.usecase.ReconcileLedgerUseCase
 import com.paysetu.app.security.keys.KeyManager
 import com.paysetu.app.security.signing.KeystoreTransactionSigner
 import com.paysetu.app.domain.model.sync.SyncResponse
+import kotlinx.coroutines.delay
 
 class PaySetuApp : Application() {
 
@@ -34,6 +35,7 @@ class PaySetuApp : Application() {
     val deviceRepository by lazy { DeviceStateRepository(database.deviceStateDao()) }
     val p2pManager by lazy { P2PTransferManager(this) }
 
+    // 💡 THE CRITICAL COMPONENT for Background SMS Processing
     val transactionProcessor by lazy {
         TransactionProcessor(database.ledgerDao(), chainVerifier)
     }
@@ -52,9 +54,8 @@ class PaySetuApp : Application() {
                     Log.d("PaySetu_Sync", "Sync attempt started (Simulated Offline)...")
 
                     // Simulate a slight delay for realism
-                    kotlinx.coroutines.delay(2000)
+                    delay(2000)
 
-                    // 💡 FIXED: Returning a valid SyncResponse with correct parameter names
                     Log.w("PaySetu_Sync", "Network unavailable. Returning mock offline response.")
                     return SyncResponse(
                         acceptedTxHashes = emptyList(),
@@ -70,6 +71,7 @@ class PaySetuApp : Application() {
 
     val viewModelFactory: ViewModelProvider.Factory by lazy {
         MultiViewModelFactory(
+            application = this,
             ledgerRepository = ledgerRepository,
             transactionSigner = signer,
             deviceStateRepository = deviceRepository,

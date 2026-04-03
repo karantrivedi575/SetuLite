@@ -36,11 +36,13 @@ abstract class LedgerDao {
     @Query("SELECT EXISTS(SELECT 1 FROM ledger_transactions WHERE txHash = :txHash)")
     abstract suspend fun existsByTxHash(txHash: ByteArray): Boolean
 
+    // 💡 THE BRIDGE: Update query is perfect!
     @Query("UPDATE ledger_transactions SET status = :newStatus WHERE txHash = :hash")
     abstract suspend fun updateTransactionStatus(hash: ByteArray, newStatus: TransactionStatus)
 
-    @Query("SELECT * FROM ledger_transactions WHERE status = 'PENDING' ORDER BY timestamp ASC")
-    abstract suspend fun getUnsyncedTransactions(): List<LedgerTransactionEntity>
+    // 💡 SAFETY FIX: Pass the Enum instead of a hardcoded string to avoid TypeConverter mismatches
+    @Query("SELECT * FROM ledger_transactions WHERE status = :status ORDER BY timestamp ASC")
+    abstract suspend fun getUnsyncedTransactions(status: TransactionStatus = TransactionStatus.PENDING): List<LedgerTransactionEntity>
 
     /**
      * 🔐 ATOMIC LEDGER APPEND
