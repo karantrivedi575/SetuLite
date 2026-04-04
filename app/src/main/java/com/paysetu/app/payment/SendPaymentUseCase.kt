@@ -1,15 +1,17 @@
+// File: SendPaymentUseCase.kt
 package com.paysetu.app.payment
 
+import com.paysetu.app.connectivity.HeartbeatPolicy
+import com.paysetu.app.connectivity.model.SignedTransaction
 import com.paysetu.app.ledger.ledger.LedgerRepository
 import com.paysetu.app.ledger.model.LedgerTransactionEntity
 import com.paysetu.app.ledger.model.TransactionDirection
 import com.paysetu.app.ledger.model.TransactionStatus
-import com.paysetu.app.connectivity.HeartbeatPolicy
 import com.paysetu.app.security.DeviceIntegrityChecker
+import com.paysetu.app.security.GenesisHashProvider
 import com.paysetu.app.security.KeyProvider
 import com.paysetu.app.security.PinAuthorizer
 import com.paysetu.app.security.TransactionSigner
-import com.paysetu.app.security.GenesisHashProvider
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 
@@ -37,7 +39,6 @@ class SendPaymentUseCase(
         require(pinAuthorizer.authorize(pin)) { "Invalid PIN or authentication required" }
 
         // 2️⃣ Phase 7: Fetch the Correct Previous Hash (The Chain Link)
-        // Resolves 'Unresolved reference getLastTransaction'
         val lastTransaction = ledgerRepository.getLastTransaction()
         val prevHash = lastTransaction?.txHash ?: genesisHashProvider.getGenesisHash()
 

@@ -1,3 +1,4 @@
+// File: TransactionItem.kt
 package com.paysetu.app.ledger.ui
 
 import androidx.compose.foundation.background
@@ -51,11 +52,11 @@ fun TransactionItem(
     val iconTint = if (isOutgoing) SlateBlue else EmeraldGreen
     val prefix = if (isOutgoing) "-" else "+"
 
-    // 💡 Intelligent Time Formatting
+    // 💡 Intelligent Time Formatting (Fixed overload conflict by using private renamed extensions)
     val timeString = if (isGroupedMode) {
-        transaction.timestamp.toHumanTime() // e.g., "09:46 PM"
+        transaction.timestamp.toItemHumanTime() // e.g., "09:46 PM"
     } else {
-        "${transaction.timestamp.toRelativeDateString()}, ${transaction.timestamp.toHumanTime()}" // e.g., "Today, 09:46 PM"
+        "${transaction.timestamp.toItemRelativeDateString()}, ${transaction.timestamp.toItemHumanTime()}" // e.g., "Today, 09:46 PM"
     }
 
     Row(
@@ -134,8 +135,9 @@ private fun bytesToHex(bytes: ByteArray): String =
     bytes.joinToString("") { "%02x".format(it) }
 
 // 📅 HUMANIZED DATE EXTENSIONS
-fun Long.toRelativeDateString(): String {
-    val cal = Calendar.getInstance().apply { timeInMillis = this@toRelativeDateString }
+// Fixed: Made private and renamed slightly to prevent external overload conflicts
+private fun Long.toItemRelativeDateString(): String {
+    val cal = Calendar.getInstance().apply { timeInMillis = this@toItemRelativeDateString }
     val today = Calendar.getInstance()
     val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
 
@@ -146,6 +148,6 @@ fun Long.toRelativeDateString(): String {
     }
 }
 
-fun Long.toHumanTime(): String {
+private fun Long.toItemHumanTime(): String {
     return SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(this))
 }

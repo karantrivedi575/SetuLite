@@ -1,3 +1,4 @@
+// File: LedgerModels.kt
 package com.paysetu.app.ledger.model
 
 import androidx.compose.runtime.Immutable
@@ -7,13 +8,32 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.util.UUID
 
+enum class TransactionDirection {
+    INCOMING,
+    OUTGOING
+}
+
+/**
+ * Represents the lifecycle of an offline transaction.
+ * ACCEPTED: Verified by the backend arbiter.
+ * REJECTED: Invalid signature or format.
+ * PENDING: Stored locally, waiting for sync.
+ * CONFLICTED: Double-spend detected by backend; balance is voided.
+ */
+enum class TransactionStatus {
+    ACCEPTED,
+    REJECTED,
+    PENDING,
+    CONFLICTED
+}
+
 @Immutable
 @Entity(
     tableName = "ledger_transactions",
     indices = [
         Index(value = ["txHash"], unique = true),
         Index(value = ["prevTxHash"]),
-        Index(value = ["nonce"], unique = true) // 💡 NEW: Fast lookup to prevent replay attacks
+        Index(value = ["nonce"], unique = true)
     ]
 )
 data class LedgerTransactionEntity(
@@ -36,7 +56,7 @@ data class LedgerTransactionEntity(
     val status: TransactionStatus,
 
     // ==========================================
-    // 🛡️ NEW SECURITY & AUDIT FIELDS
+    // 🛡️ SECURITY & AUDIT FIELDS
     // ==========================================
 
     /**
@@ -73,6 +93,7 @@ data class LedgerTransactionEntity(
         if (!senderDeviceId.contentEquals(other.senderDeviceId)) return false
         if (!receiverDeviceId.contentEquals(other.receiverDeviceId)) return false
         if (!signature.contentEquals(other.signature)) return false
+
         if (refundedTxHash != null) {
             if (other.refundedTxHash == null) return false
             if (!refundedTxHash.contentEquals(other.refundedTxHash)) return false

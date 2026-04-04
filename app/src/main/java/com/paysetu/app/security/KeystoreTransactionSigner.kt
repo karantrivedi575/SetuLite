@@ -7,6 +7,10 @@ import java.security.Signature
  * Concrete implementation of the TransactionSigner interface using Android Keystore.
  * Uses hardware-backed ECDSA keys for Phase 10 digital signatures.
  */
+
+interface TransactionSigner {
+    fun sign(payloadHash: ByteArray): ByteArray
+}
 class KeystoreTransactionSigner : TransactionSigner {
 
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply {

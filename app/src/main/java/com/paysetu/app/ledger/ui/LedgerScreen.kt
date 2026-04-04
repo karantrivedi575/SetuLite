@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items // 💡 FIXED: This import prevents the 'Int' type mismatch error
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -72,9 +73,9 @@ fun LedgerScreen(
         list.sortedByDescending { it.timestamp }
     }
 
-    // 📅 Group by Humanized Date
+    // 📅 Group by Humanized Date (Fixed overload conflict)
     val groupedTransactions = remember(filteredTransactions) {
-        filteredTransactions.groupBy { it.timestamp.toRelativeDateString() }
+        filteredTransactions.groupBy { it.timestamp.toLedgerRelativeDateString() }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(DeepSlateGradient)) {
@@ -304,9 +305,9 @@ fun AuditField(label: String, value: String, color: Color, isShort: Boolean = fa
     }
 }
 
-// 📅 HELPER FUNCTIONS FOR HUMANIZED DATES
-fun Long.toRelativeDateString(): String {
-    val cal = Calendar.getInstance().apply { timeInMillis = this@toRelativeDateString }
+// 💡 FIXED: Made private and renamed slightly to prevent ANY external overload conflicts
+private fun Long.toLedgerRelativeDateString(): String {
+    val cal = Calendar.getInstance().apply { timeInMillis = this@toLedgerRelativeDateString }
     val today = Calendar.getInstance()
     val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
 
@@ -315,8 +316,4 @@ fun Long.toRelativeDateString(): String {
         cal.get(Calendar.YEAR) == yesterday.get(Calendar.YEAR) && cal.get(Calendar.DAY_OF_YEAR) == yesterday.get(Calendar.DAY_OF_YEAR) -> "Yesterday"
         else -> SimpleDateFormat("MMMM dd, yyyy", Locale.getDefault()).format(Date(this))
     }
-}
-
-fun Long.toHumanTime(): String {
-    return SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(this))
 }
