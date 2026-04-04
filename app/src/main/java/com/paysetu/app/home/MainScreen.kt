@@ -1,6 +1,6 @@
+// File: MainScreen.kt
 package com.paysetu.app.home
 
-import android.graphics.Paint
 import android.util.Log
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -24,16 +24,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithCache // 💡 ADDED: For memory optimization
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay // 💡 ADDED: For animation reset
+import kotlinx.coroutines.delay
 import com.paysetu.app.ledger.ledger.LedgerRepository
 import com.paysetu.app.ledger.model.TransactionDirection
 import com.paysetu.app.ledger.ui.TransactionItem
@@ -44,35 +40,8 @@ import com.paysetu.app.payment.ReceivePaymentScreen
 import com.paysetu.app.payment.SendPaymentScreen
 import com.paysetu.app.connectivity.ui.PermissionGate
 
-val DeepSlateGradient = Brush.verticalGradient(listOf(Color(0xFF0F172A), Color(0xFF020617)))
-val EmeraldGreen = Color(0xFF10B981)
-val SlateBlue = Color(0xFF94A3B8)
-val SoftText = Color.White.copy(alpha = 0.7f)
-
-fun Modifier.crispGlass(shape: RoundedCornerShape = RoundedCornerShape(24.dp)) = this
-    .clip(shape)
-    .background(Color.White.copy(alpha = 0.05f))
-    .border(0.5.dp, Color.White.copy(alpha = 0.12f), shape)
-
-// 💡 THE FIX: Use drawWithCache to allocate the Paint object EXACTLY ONCE.
-// This stops the Garbage Collector from suffocating the RenderThread.
-fun Modifier.neonGlow(color: Color) = this.drawWithCache {
-    val radius = 40.dp.toPx()
-    val paint = Paint().apply {
-        isAntiAlias = true
-        this.color = android.graphics.Color.TRANSPARENT
-        setShadowLayer(radius, 0f, 0f, color.toArgb())
-    }
-
-    onDrawBehind {
-        drawContext.canvas.nativeCanvas.drawCircle(
-            center.x,
-            center.y,
-            radius / 2f,
-            paint
-        )
-    }
-}
+// 💡 NEW: Import from our unified theme! Replaces local palette, glassCard, and neonGlow.
+import com.paysetu.app.Core.theme.*
 
 // 💡 THE FIX: Isolated the infinite animation into its own Composable.
 // Now, only this tiny row recomposes 60 times a second, instead of the entire app UI.
@@ -93,21 +62,21 @@ fun IntegrityBadge(isVerified: Boolean) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(RoundedCornerShape(50))
-            .background(if (isVerified) EmeraldGreen.copy(alpha = 0.10f) else Color(0xFFF43F5E).copy(alpha = 0.10f))
-            .border(1.dp, if (isVerified) EmeraldGreen.copy(alpha = 0.2f) else Color(0xFFF43F5E).copy(alpha = 0.2f), RoundedCornerShape(50))
+            .background(if (isVerified) EmeraldGreen.copy(alpha = 0.10f) else RoseError.copy(alpha = 0.10f))
+            .border(1.dp, if (isVerified) EmeraldGreen.copy(alpha = 0.2f) else RoseError.copy(alpha = 0.2f), RoundedCornerShape(50))
             .padding(horizontal = 14.dp, vertical = 6.dp)
     ) {
         Icon(
             imageVector = if (isVerified) Icons.Default.Shield else Icons.Default.Warning,
             contentDescription = null,
-            tint = if (isVerified) EmeraldGreen.copy(alpha = pulseAlpha) else Color(0xFFF43F5E),
+            tint = if (isVerified) EmeraldGreen.copy(alpha = pulseAlpha) else RoseError,
             modifier = Modifier.size(14.dp)
         )
         Spacer(Modifier.width(6.dp))
         Text(
             text = if (isVerified) "Secured by Hardware" else "Integrity Compromised",
             fontSize = 12.sp,
-            color = if (isVerified) EmeraldGreen else Color(0xFFF43F5E),
+            color = if (isVerified) EmeraldGreen else RoseError,
             fontWeight = FontWeight.SemiBold
         )
     }
@@ -202,7 +171,7 @@ fun MainScreen(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .crispGlass()
+                                    .glassCard() // 💡 Replaced crispGlass with our centralized glassCard
                                     .padding(vertical = 32.dp, horizontal = 24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
@@ -211,7 +180,7 @@ fun MainScreen(
 
                                 Text(
                                     text = "₢${animatedBalanceState.value.toLong()}",
-                                    modifier = Modifier.neonGlow(EmeraldGreen.copy(alpha = 0.15f)),
+                                    modifier = Modifier.neonGlow(EmeraldGreen.copy(alpha = 0.15f)), // 💡 Sourced from UIComponents.kt
                                     fontSize = 64.sp,
                                     fontWeight = FontWeight.Medium,
                                     letterSpacing = (-1.5).sp,
@@ -237,15 +206,13 @@ fun MainScreen(
 
                                 Spacer(modifier = Modifier.height(24.dp))
 
-                                // 💡 THE FIX: Replaced the massive inline animation block
-                                // with our heavily optimized isolated composable.
                                 IntegrityBadge(isVerified = isVerified)
                             }
                         }
 
                         item {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                val trustColor = if (uiState.trustScore >= 90) EmeraldGreen else if (uiState.trustScore >= 50) Color(0xFFFACC15) else Color(0xFFF43F5E)
+                                val trustColor = if (uiState.trustScore >= 90) EmeraldGreen else if (uiState.trustScore >= 50) Color(0xFFFACC15) else RoseError
                                 Box(modifier = Modifier.weight(1f)) {
                                     DashboardWidget("Trust Score", "${uiState.trustScore}%", trustColor, Icons.Default.Timeline)
                                 }
@@ -372,7 +339,7 @@ fun DashboardWidget(label: String, value: String, valueColor: Color, bgIcon: Ima
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .crispGlass(RoundedCornerShape(20.dp))
+            .glassCard(RoundedCornerShape(20.dp)) // 💡 Replaced crispGlass
             .height(100.dp)
     ) {
         Icon(

@@ -1,3 +1,4 @@
+// File: ReceivePaymentScreen.kt
 package com.paysetu.app.payment
 
 import android.content.ClipData
@@ -9,7 +10,6 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -26,7 +26,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -35,7 +34,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.paysetu.app.payment.qr.QrCodeGenerator
@@ -43,18 +41,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// 💎 PREMIUM FINTECH PALETTE
-private val DeepSlateGradient = Brush.verticalGradient(listOf(Color(0xFF0F172A), Color(0xFF020617)))
-private val EmeraldGreen = Color(0xFF10B981)
-private val RoseError = Color(0xFFF43F5E)
-private val SlateBlue = Color(0xFF94A3B8)
-private val SoftText = Color.White.copy(alpha = 0.7f)
-
-// 💎 CRISP GLASSMORPHISM UTILITY (Updated with 0.5dp Depth)
-private fun Modifier.glassCard(shape: RoundedCornerShape = RoundedCornerShape(24.dp)) = this
-    .clip(shape)
-    .background(Color.White.copy(alpha = 0.05f))
-    .border(0.5.dp, Color.White.copy(alpha = 0.12f), shape) // 💡 0.5dp subtle depth stroke
+// 💡 NEW: Import from our unified theme! This replaces all local colors, gradients, and modifiers.
+import com.paysetu.app.Core.theme.*
 
 @Composable
 fun ReceivePaymentScreen(
@@ -143,25 +131,6 @@ fun ReceivePaymentScreen(
                                             contentDescription = "Payment QR Code",
                                             modifier = Modifier.fillMaxSize()
                                         )
-
-                                        // 💡 FIX: Disabled BRANDED LOGO CENTER to prevent data matrix corruption
-                                        // Unless QrCodeGenerator uses Error Correction Level H, this will block ML Kit.
-                                        /*
-                                        Surface(
-                                            modifier = Modifier.size(48.dp),
-                                            color = Color.White,
-                                            shape = CircleShape,
-                                            border = BorderStroke(3.dp, Color.White)
-                                        ) {
-                                            Box(
-                                                modifier = Modifier.fillMaxSize().background(Color(0xFF020617)),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                // Tiny logo placeholder
-                                                Text("P", color = EmeraldGreen, fontWeight = FontWeight.Black, fontSize = 20.sp)
-                                            }
-                                        }
-                                        */
                                     }
                                 }
                             }
@@ -249,15 +218,11 @@ fun ReceivePaymentScreen(
                         }
                     }
 
+                    // 💡 REPLACED: Using our centralized ProcessingView!
                     is PaymentUiState.Processing -> {
-                        CircularProgressIndicator(modifier = Modifier.size(64.dp), color = EmeraldGreen, strokeWidth = 4.dp)
-                        Spacer(modifier = Modifier.height(32.dp))
-                        Text("Verifying Transaction...", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
-                        Text(
-                            "Securing ledger entry offline.\nPlease keep devices close.",
-                            color = SoftText,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(top = 12.dp)
+                        ProcessingView(
+                            title = "Verifying Transaction...",
+                            subtitle = "Securing ledger entry offline.\nPlease keep devices close."
                         )
                     }
 
@@ -302,6 +267,8 @@ fun ReceivePaymentScreen(
 
                         Column(modifier = Modifier.fillMaxWidth().glassCard().padding(24.dp)) {
                             val timeFormat = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
+
+                            // 💡 REPLACED: Using our centralized ReceiptRow!
                             ReceiptRow("Time Received", timeFormat.format(Date()))
 
                             HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp), color = Color.White.copy(alpha = 0.1f))
@@ -382,24 +349,5 @@ private fun QuickActionButton(icon: ImageVector, label: String, onClick: () -> U
     ) {
         Icon(icon, null, tint = Color.White, modifier = Modifier.size(24.dp))
         Text(label, color = SlateBlue, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-    }
-}
-
-@Composable
-private fun ReceiptRow(label: String, value: String, isBold: Boolean = false, valueColor: Color = Color.White) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(text = label, color = SoftText, fontSize = if (isBold) 16.sp else 14.sp)
-        Text(
-            text = value,
-            color = valueColor,
-            fontWeight = if (isBold) FontWeight.Black else FontWeight.Medium,
-            fontSize = if (isBold) 18.sp else 14.sp,
-            textAlign = TextAlign.End,
-            fontFamily = if (label.contains("Hash")) FontFamily.Monospace else FontFamily.SansSerif
-        )
     }
 }

@@ -1,3 +1,4 @@
+// File: PaymentViewModel.kt
 package com.paysetu.app.payment
 
 import android.app.Application
@@ -15,7 +16,7 @@ import com.paysetu.app.ledger.model.LedgerTransactionEntity
 import com.paysetu.app.ledger.model.TransactionDirection
 import com.paysetu.app.ledger.model.TransactionStatus
 import com.paysetu.app.connectivity.P2PTransferManager
-import com.paysetu.app.security.KeystoreTransactionSigner
+import com.paysetu.app.security.TransactionSigner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -48,9 +49,11 @@ object OfflinePaymentEventBus {
 class PaymentViewModel(
     private val application: Application,
     private val ledgerRepository: LedgerRepository,
-    private val transactionSigner: KeystoreTransactionSigner,
+    private val transactionSigner: TransactionSigner,
     private val p2pManager: P2PTransferManager,
-    private val transactionProcessor: TransactionProcessor
+    private val transactionProcessor: TransactionProcessor,
+    // 💡 THE FIX: Swapped out fragmented UseCases for the unified OfflinePaymentEngine
+    private val offlinePaymentEngine: OfflinePaymentEngine
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow<PaymentUiState>(PaymentUiState.Idle)
@@ -64,9 +67,7 @@ class PaymentViewModel(
             initialValue = emptyList()
         )
 
-    // 🚀 THE FIX: Offload total balance calculation to the background thread.
     val totalBalance: StateFlow<Long> = ledgerHistory.map { history ->
-        // This math now happens off the Main Thread
         history.sumOf { if (it.direction == TransactionDirection.INCOMING) it.amount else -it.amount }
     }.stateIn(
         scope = viewModelScope,
@@ -95,24 +96,14 @@ class PaymentViewModel(
     private var pendingSmsTxHash: String? = null
     private var pendingSmsAmount: Long = 0L
 
-    // 🚀 THE FINAL FIX: Bulletproof EventBus Observer (No DB Delay)
     init {
         viewModelScope.launch {
             OfflinePaymentEventBus.ackReceived.collect { ackHash ->
                 if (ackHash != null) {
-                    // Only intercept if we are actively waiting on the UI
                     if (_uiState.value is PaymentUiState.SmsSending || _uiState.value is PaymentUiState.Processing) {
-
                         Log.i("PaySetu_UI", "EventBus caught ACK! Transitioning to Receipt Screen instantly.")
-
-                        // Cancel the auto-reversal timeout
                         connectionTimeoutJob?.cancel()
-
-                        // 🛑 DATABASE LOOKUP REMOVED.
-                        // Push the UI to the Receipt screen instantly using the memory cache!
                         _uiState.value = PaymentUiState.Success(ackHash, pendingSmsAmount)
-
-                        // Clear pending memory & reset bus
                         pendingSmsTxHash = null
                         pendingSmsAmount = 0L
                         OfflinePaymentEventBus.clearAck()
@@ -122,20 +113,38 @@ class PaymentViewModel(
         }
     }
 
-    // 🚀 NEW: The function called directly from the UI's LaunchedEffect
     fun forceSuccessState(txHashHex: String) {
-        // 1. Stop the 10-minute auto-reversal timer immediately
         connectionTimeoutJob?.cancel()
-
-        // 2. Snap the UI state to Success using the confirmed hash
-        // and the amount we have stored in memory (pendingSmsAmount)
         _uiState.value = PaymentUiState.Success(txHashHex, pendingSmsAmount)
-
-        // 3. Cleanup memory
         pendingSmsTxHash = null
         pendingSmsAmount = 0L
-
         Log.i("PaySetu_VM", "Forcefully transitioned to Success state for hash: $txHashHex")
+    }
+
+    // ==========================================
+    // 💡 EXECUTING VIA OFFLINE PAYMENT ENGINE
+    // ==========================================
+    /**
+     * Executes the payment using the dedicated unified Engine.
+     * @param amount The value to send.
+     * @param pin The PIN captured from the UI input field.
+     */
+    fun sendPayment(amount: Long, pin: String) {
+        viewModelScope.launch {
+            _uiState.value = PaymentUiState.Processing
+            try {
+                // 💡 THE FIX: Calling the unified Engine
+                val result = offlinePaymentEngine.sendPayment(amount, pin)
+                _uiState.value = PaymentUiState.Success(
+                    txHash = bytesToHex(result.txHash),
+                    amount = amount
+                )
+            } catch (e: Exception) {
+                _uiState.value = PaymentUiState.Failure(
+                    reason = e.message ?: "Unknown error occurred"
+                )
+            }
+        }
     }
 
     // ==========================================
@@ -146,7 +155,6 @@ class PaymentViewModel(
             _uiState.value = PaymentUiState.SmsSending(phoneNumber)
 
             try {
-                // Check against the background-calculated balance
                 if (amount > totalBalance.value) {
                     _uiState.value = PaymentUiState.Failure("Insufficient Credits!")
                     return@launch
@@ -177,11 +185,9 @@ class PaymentViewModel(
                 pendingSmsTxHash = resultHashHex
                 pendingSmsAmount = amount
 
-                // 💡 SECURITY FIX: Added timestamp to the payload to prevent delayed double-spends
                 val payload = "SETU:TX-OFFLINE|$amount|$resultHashHex|$currentTimestamp"
 
                 try {
-                    // 1. Attempt Background Sending (Requires SEND_SMS permission)
                     val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         context.getSystemService(SmsManager::class.java)
                     } else {
@@ -190,22 +196,16 @@ class PaymentViewModel(
                     }
                     smsManager.sendTextMessage(phoneNumber, null, payload, null, null)
                     Log.i("PaySetu_SMS", "Background Text Dispatched: $payload. Waiting for ACK...")
-
-                    // Start the 10-minute auto-reversal timer
                     startReversalTimer(600_000L, resultHashHex, amount)
 
                 } catch (securityEx: SecurityException) {
-                    // 2. FALLBACK: Open Default SMS App if permission denied
                     Log.w("PaySetu_SMS", "Background SMS denied. Opening SMS App.")
-
                     val smsIntent = Intent(Intent.ACTION_SENDTO).apply {
                         data = Uri.parse("smsto:$phoneNumber")
                         putExtra("sms_body", payload)
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     }
                     context.startActivity(smsIntent)
-
-                    // We still start the timer, because the user will press "Send" in their app
                     startReversalTimer(600_000L, resultHashHex, amount)
                 }
 
@@ -224,8 +224,6 @@ class PaymentViewModel(
 
             if (ackHash != null) {
                 Log.i("PaySetu_SMS", "ACK Received via Text! Transaction Verified.")
-
-                // 1. Update the database (for permanence)
                 viewModelScope.launch {
                     withContext(Dispatchers.IO) {
                         try {
@@ -236,8 +234,6 @@ class PaymentViewModel(
                         }
                     }
                 }
-
-                // 2. Fire the Event Bus (for instant UI reaction)
                 OfflinePaymentEventBus.triggerAck(ackHash)
             }
         } else if (cleanPayload.startsWith("TX-OFFLINE")) {
@@ -287,11 +283,8 @@ class PaymentViewModel(
 
             if (pendingSmsTxHash == pendingHashHex) {
                 Log.w("PaySetu_Security", "ACK Timeout! Auto-reversing transaction: $pendingHashHex")
-
                 executeAutoReversal(pendingHashHex, refundAmount)
-
                 _uiState.value = PaymentUiState.Failure("No response from receiver. ₢$refundAmount has been refunded to your wallet.")
-
                 pendingSmsTxHash = null
                 pendingSmsAmount = 0L
             }
@@ -303,13 +296,6 @@ class PaymentViewModel(
             try {
                 val hashByteArray = failedTxHashHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
-                // 1. Mark original as REVERSED
-                withContext(Dispatchers.IO) {
-                    // Make sure your enum supports 'REVERSED', otherwise change this to your failure status
-                    // ledgerRepository.updateTransactionStatus(hashByteArray, TransactionStatus.REVERSED)
-                }
-
-                // 2. Create the incoming Refund block
                 val lastTx = withContext(Dispatchers.IO) { ledgerRepository.getLastTransaction() }
                 val validatedPrevHash = lastTx?.txHash ?: ByteArray(32) { 0 }
 
@@ -318,7 +304,7 @@ class PaymentViewModel(
                     senderDeviceId = "SYSTEM_REFUND".toByteArray(), receiverDeviceId = "LOCAL_DEVICE".toByteArray(),
                     amount = refundAmount, timestamp = System.currentTimeMillis(), signature = ByteArray(0),
                     direction = TransactionDirection.INCOMING, status = TransactionStatus.ACCEPTED,
-                    refundedTxHash = hashByteArray // 💡 Link it to the failed transaction
+                    refundedTxHash = hashByteArray
                 )
 
                 val finalTxHash = calculateTransactionHash(refundTxTemplate)
@@ -365,23 +351,15 @@ class PaymentViewModel(
         }
     }
 
-    // 🚀 FIXED: Unlocks the radio state upon successful tap
     fun startTapToPayMode(onTapDetected: (String) -> Unit) {
         if (isRadioActive) return
         isRadioActive = true
-
-        // Stop any existing discovery to focus strictly on proximity
         p2pManager.stopAll()
 
         p2pManager.startTapDiscovery { receiverId ->
             viewModelScope.launch {
-                // 🛑 THE FIX: We found the target!
-                // 1. Turn off the radar to save battery while the user types the amount.
                 p2pManager.stopAll()
-
-                // 2. Unlock the radio state so the "Authorize" button can actually send the payload.
                 isRadioActive = false
-
                 onTapDetected(receiverId)
             }
         }
@@ -411,7 +389,6 @@ class PaymentViewModel(
 
     fun sendOfflinePayment(amount: Long, receiverEndpointId: String) {
         viewModelScope.launch {
-            // Check against the background-calculated balance
             if (amount > totalBalance.value) {
                 _uiState.value = PaymentUiState.Failure("Insufficient Credits!")
                 return@launch
@@ -464,9 +441,6 @@ class PaymentViewModel(
         }
     }
 
-    // ==========================================
-    // 🏦 BANK TOP-UP LOGIC - UNTOUCHED
-    // ==========================================
     fun addCreditsFromBank(creditAmount: Long) {
         viewModelScope.launch {
             _uiState.value = PaymentUiState.Processing
@@ -496,7 +470,6 @@ class PaymentViewModel(
         }
     }
 
-    // Standard short timeout for P2P Radio connections
     private fun startTimeoutTimer(duration: Long, errorMessage: String) {
         connectionTimeoutJob?.cancel()
         connectionTimeoutJob = viewModelScope.launch {

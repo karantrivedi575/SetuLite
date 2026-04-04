@@ -1,3 +1,4 @@
+// File: P2PTransferManager.kt
 package com.paysetu.app.connectivity
 
 import android.Manifest
@@ -11,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.AdvertisingOptions
 import com.google.android.gms.nearby.connection.ConnectionInfo
@@ -24,6 +26,11 @@ import com.google.android.gms.nearby.connection.PayloadCallback
 import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
 
+/**
+ * 🚀 HYBRID OFFLINE TRANSFER MANAGER
+ * Uses Google Nearby Connections for high-bandwidth payload transfer,
+ * and raw Bluetooth Low Energy (BLE) for high-precision physical "Tap" detection.
+ */
 class P2PTransferManager(private val context: Context) {
 
     private val connectionsClient = Nearby.getConnectionsClient(context)
@@ -31,7 +38,6 @@ class P2PTransferManager(private val context: Context) {
     private val STRATEGY = Strategy.P2P_STAR
 
     // 🚀 PROXIMITY CONFIG: -45 is robust for most phones with cases.
-    // Touching usually hits -30 to -40.
     private val TAP_RSSI_THRESHOLD = -45
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -96,10 +102,7 @@ class P2PTransferManager(private val context: Context) {
                     // treat it as a successful proximity handshake.
                     if (name.startsWith("SETU-")) {
                         Log.d("PaySetu_P2P", "Proximity target resolved via Nearby: $name")
-
-                        // 🛡️ HARDWARE SAFETY: Force kill radios immediately to prevent locking
-                        stopAll()
-
+                        stopAll() // 🛡️ HARDWARE SAFETY
                         onTapDetected(name)
                     }
                 }
@@ -113,7 +116,10 @@ class P2PTransferManager(private val context: Context) {
     }
 
     private fun startBleTapScanner(onTapDetected: (String) -> Unit) {
-        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) return
+        if (!hasBleScanPermission()) {
+            Log.w("PaySetu_P2P", "Missing BLUETOOTH_SCAN permission. Falling back to Nearby only.")
+            return
+        }
 
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY) // 🚀 Fast as possible
@@ -131,10 +137,7 @@ class P2PTransferManager(private val context: Context) {
                     // 💥 PHYSICAL TAP DETECTED
                     if (rssi >= TAP_RSSI_THRESHOLD) {
                         Log.i("PaySetu_P2P", "💥 TAP SUCCESS! RSSI: $rssi | ID: $deviceName")
-
-                        // 🛡️ HARDWARE SAFETY: Force kill radios immediately to prevent locking
-                        stopAll()
-
+                        stopAll() // 🛡️ HARDWARE SAFETY
                         onTapDetected(deviceName)
                     }
                 }
@@ -151,7 +154,7 @@ class P2PTransferManager(private val context: Context) {
 
     private fun stopBleTapScanner() {
         try {
-            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+            if (hasBleScanPermission()) {
                 bleScanCallback?.let { bleScanner?.stopScan(it) }
             }
             bleScanCallback = null
@@ -264,5 +267,13 @@ class P2PTransferManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e("PaySetu_P2P", "Error shutting down radios", e)
         }
+    }
+
+    // 💡 Helper check extracted from old BleScanner
+    private fun hasBleScanPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.BLUETOOTH_SCAN
+        ) == PackageManager.PERMISSION_GRANTED
     }
 }

@@ -1,3 +1,4 @@
+// File: MainActivity.kt
 package com.paysetu.app
 
 import android.app.Application
@@ -20,11 +21,12 @@ import com.paysetu.app.ledger.ledger.LedgerRepository
 import com.paysetu.app.ledger.ledger.TransactionProcessor
 import com.paysetu.app.connectivity.P2PTransferManager
 import com.paysetu.app.sync.PerformGlobalSyncUseCase
-import com.paysetu.app.security.KeystoreTransactionSigner
+import com.paysetu.app.security.TransactionSigner
 import com.paysetu.app.connectivity.ui.PermissionGate
 import com.paysetu.app.home.DashboardViewModel
 import com.paysetu.app.home.MainScreen
 import com.paysetu.app.payment.PaymentViewModel
+import com.paysetu.app.payment.OfflinePaymentEngine // 💡 ADDED: Import for the new engine
 import com.paysetu.app.Core.theme.PaySetuTheme
 
 class MainActivity : FragmentActivity() {
@@ -83,11 +85,12 @@ class MainActivity : FragmentActivity() {
 class MultiViewModelFactory(
     private val application: Application,
     private val ledgerRepository: LedgerRepository,
-    private val transactionSigner: KeystoreTransactionSigner,
+    private val transactionSigner: TransactionSigner,
     private val deviceStateRepository: DeviceStateRepository,
     private val performGlobalSyncUseCase: PerformGlobalSyncUseCase,
     private val p2pManager: P2PTransferManager,
-    private val transactionProcessor: TransactionProcessor
+    private val transactionProcessor: TransactionProcessor,
+    private val offlinePaymentEngine: OfflinePaymentEngine // 💡 ADDED: Injecting the new engine
 ) : ViewModelProvider.Factory {
 
     @Suppress("UNCHECKED_CAST")
@@ -99,7 +102,8 @@ class MultiViewModelFactory(
                     ledgerRepository = ledgerRepository,
                     transactionSigner = transactionSigner,
                     p2pManager = p2pManager,
-                    transactionProcessor = transactionProcessor
+                    transactionProcessor = transactionProcessor,
+                    offlinePaymentEngine = offlinePaymentEngine // 💡 THE FIX: Safely passed to ViewModel
                 ) as T
             }
 

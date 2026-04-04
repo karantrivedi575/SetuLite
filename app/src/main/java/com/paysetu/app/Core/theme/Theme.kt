@@ -1,3 +1,4 @@
+// File: Theme.kt
 package com.paysetu.app.Core.theme
 
 import android.app.Activity
@@ -9,7 +10,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
-import com.paysetu.app.home.SlateBlue
 
 // 💎 REFINED MONOCHROME + EMERALD COLOR SCHEME
 private val PremiumFintechColorScheme = darkColorScheme(
@@ -31,7 +31,7 @@ private val PremiumFintechColorScheme = darkColorScheme(
     onSurface = Color.White,
     onSurfaceVariant = SlateBlue,   // 0xFF94A3B8 - Unified muted labels
 
-    error = Color(0xFFF43F5E),      // Rose Error
+    error = RoseError,              // 💡 THE FIX: Using the centralized RoseError from Color.kt
     onError = Color.White
 )
 

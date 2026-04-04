@@ -1,3 +1,4 @@
+// File: SendPaymentScreen.kt
 package com.paysetu.app.payment
 
 import android.Manifest
@@ -41,7 +42,6 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
@@ -61,7 +61,6 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -79,18 +78,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// 💎 PREMIUM FINTECH PALETTE
-private val DeepSlateGradient = Brush.verticalGradient(listOf(Color(0xFF0F172A), Color(0xFF020617)))
-private val EmeraldGreen = Color(0xFF10B981)
-private val RoseError = Color(0xFFF43F5E)
-private val SlateBlue = Color(0xFF94A3B8)
-private val SoftText = Color.White.copy(alpha = 0.7f)
-
-// 💎 GLASSMORPHISM UTILITY
-private fun Modifier.glassCard(shape: RoundedCornerShape = RoundedCornerShape(16.dp)) = this
-    .clip(shape)
-    .background(Color.White.copy(alpha = 0.05f))
-    .border(1.dp, Color.White.copy(alpha = 0.1f), shape)
+// 💡 NEW: Import from our unified theme! Replaces local palette, glassCard, and shared composables.
+import com.paysetu.app.Core.theme.*
 
 // 🚀 THE FIX: Added TAP_TO_PAY to our Mode Enum
 private enum class SendStep { SCANNER, TAP_TO_PAY, PHONE_ENTRY, AMOUNT_ENTRY }
@@ -819,34 +808,6 @@ fun ReceiptView(
             Text("Done", fontSize = 18.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
         }
         Spacer(modifier = Modifier.height(16.dp))
-    }
-}
-
-@Composable
-fun ProcessingView(title: String, subtitle: String, onCancel: (() -> Unit)?) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier.fillMaxSize()
-    ) {
-        CircularProgressIndicator(modifier = Modifier.size(64.dp), color = EmeraldGreen, strokeWidth = 4.dp)
-        Spacer(modifier = Modifier.height(32.dp))
-        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
-        Text(subtitle, color = SoftText, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp, start = 32.dp, end = 32.dp))
-        Spacer(modifier = Modifier.height(48.dp))
-        if (onCancel != null) {
-            TextButton(onClick = onCancel) {
-                Text("Cancel Transfer", color = RoseError)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReceiptRow(label: String, value: String, isBold: Boolean = false, valueColor: Color = Color.White, valueSize: TextUnit = 14.sp) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Text(text = label, color = SoftText, fontSize = if (isBold) 16.sp else 14.sp)
-        Text(text = value, color = valueColor, fontWeight = if (isBold) FontWeight.Black else FontWeight.Medium, fontSize = valueSize)
     }
 }
 
