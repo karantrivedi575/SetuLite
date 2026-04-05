@@ -2,7 +2,6 @@ package com.paysetu.app.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.paysetu.app.Core.device.DeviceStateRepository
 import com.paysetu.app.sync.PerformGlobalSyncUseCase
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,7 +19,7 @@ data class DashboardUiState(
 
 // Note: Add @HiltViewModel and @Inject constructor here if you are using Dagger Hilt for Dependency Injection
 class DashboardViewModel(
-    private val deviceStateRepository: DeviceStateRepository,
+    private val deviceStateRepository: `DeviceState.kt`,
     private val performGlobalSyncUseCase: PerformGlobalSyncUseCase
 ) : ViewModel() {
 

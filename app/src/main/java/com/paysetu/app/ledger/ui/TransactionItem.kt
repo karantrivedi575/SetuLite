@@ -2,7 +2,6 @@
 package com.paysetu.app.ledger.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,17 +23,8 @@ import com.paysetu.app.ledger.model.TransactionDirection
 import java.text.SimpleDateFormat
 import java.util.*
 
-// 💎 Unified Elite Palette
-private val EmeraldGreen = Color(0xFF10B981)
-private val SlateBlue = Color(0xFF94A3B8)
-private val DeepNavy = Color(0xFF020617)
-
-// 💎 HIGH-PERFORMANCE CRISP GLASS
-fun Modifier.crispRowGlass(shape: RoundedCornerShape = RoundedCornerShape(18.dp)) = this
-    .clip(shape)
-    .background(Color.White.copy(alpha = 0.05f))
-    // 💡 0.5dp dark stroke for subtle depth against the deep background
-    .border(0.5.dp, Color.White.copy(alpha = 0.12f), shape)
+// 💎 IMPORT OUR UNIFIED THEME AND COMPONENTS
+import com.paysetu.app.Core.theme.*
 
 @Composable
 fun TransactionItem(
@@ -63,7 +53,7 @@ fun TransactionItem(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp)
-            .crispRowGlass() // 💡 Reliable, clean glass look
+            .glassCard(RoundedCornerShape(18.dp)) // 💡 Replaced crispRowGlass with unified glassCard
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

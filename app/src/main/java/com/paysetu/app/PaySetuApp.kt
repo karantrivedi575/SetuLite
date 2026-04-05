@@ -6,7 +6,6 @@ import android.util.Log
 import androidx.lifecycle.ViewModelProvider
 import androidx.room.Room
 import com.paysetu.app.Core.database.PaySetuDatabase
-import com.paysetu.app.Core.device.DeviceStateRepository
 import com.paysetu.app.ledger.ChainVerifier
 import com.paysetu.app.ledger.ledger.LedgerRepository
 import com.paysetu.app.ledger.ledger.TransactionProcessor
@@ -43,7 +42,7 @@ class PaySetuApp : Application() {
     }
 
     val ledgerRepository by lazy { LedgerRepository(database.ledgerDao(), chainVerifier) }
-    val deviceRepository by lazy { DeviceStateRepository(database.deviceStateDao()) }
+    val deviceRepository by lazy { `DeviceState.kt`(database.deviceStateDao()) }
     val p2pManager by lazy { P2PTransferManager(this) }
 
     // 💡 THE CRITICAL COMPONENT for Background SMS Processing

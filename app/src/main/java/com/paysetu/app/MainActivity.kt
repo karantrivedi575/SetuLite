@@ -16,7 +16,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.paysetu.app.Core.device.DeviceStateRepository
 import com.paysetu.app.ledger.ledger.LedgerRepository
 import com.paysetu.app.ledger.ledger.TransactionProcessor
 import com.paysetu.app.connectivity.P2PTransferManager
@@ -86,7 +85,7 @@ class MultiViewModelFactory(
     private val application: Application,
     private val ledgerRepository: LedgerRepository,
     private val transactionSigner: TransactionSigner,
-    private val deviceStateRepository: DeviceStateRepository,
+    private val deviceStateRepository: `DeviceState.kt`,
     private val performGlobalSyncUseCase: PerformGlobalSyncUseCase,
     private val p2pManager: P2PTransferManager,
     private val transactionProcessor: TransactionProcessor,

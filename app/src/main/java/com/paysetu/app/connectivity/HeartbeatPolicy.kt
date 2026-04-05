@@ -1,10 +1,9 @@
 package com.paysetu.app.connectivity
 
-import com.paysetu.app.Core.device.DeviceStateRepository
 import java.util.concurrent.TimeUnit
 
 class HeartbeatPolicy(
-    private val deviceStateRepository: DeviceStateRepository
+    private val deviceStateRepository: `DeviceState.kt`
 ) {
     companion object {
         // Strict 48-hour window as defined in Phase 1

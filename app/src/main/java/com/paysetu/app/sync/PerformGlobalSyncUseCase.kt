@@ -1,13 +1,12 @@
 package com.paysetu.app.sync
 
-import com.paysetu.app.Core.device.DeviceStateRepository
 import com.paysetu.app.ledger.ReconcileLedgerUseCase
 import com.paysetu.app.ledger.ledger.LedgerRepository
 import com.paysetu.app.payment.SignedTransaction
 
 class PerformGlobalSyncUseCase(
     private val ledgerRepository: LedgerRepository,
-    private val deviceStateRepository: DeviceStateRepository,
+    private val deviceStateRepository: `DeviceState.kt`,
     private val reconcileLedgerUseCase: ReconcileLedgerUseCase,
     private val backendApiService: BackendSyncService
 ) {

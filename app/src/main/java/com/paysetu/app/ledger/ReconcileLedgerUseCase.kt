@@ -1,7 +1,6 @@
 package com.paysetu.app.ledger
 
 import com.paysetu.app.connectivity.HeartbeatPolicy
-import com.paysetu.app.Core.device.DeviceStateRepository
 import com.paysetu.app.ledger.model.TransactionStatus
 import com.paysetu.app.ledger.ledger.LedgerRepository
 import com.paysetu.app.sync.SyncResponse
@@ -10,7 +9,7 @@ import kotlinx.coroutines.withContext
 
 class ReconcileLedgerUseCase(
     private val ledgerRepository: LedgerRepository,
-    private val deviceStateRepository: DeviceStateRepository,
+    private val deviceStateRepository: `DeviceState.kt`,
     private val heartbeatPolicy: HeartbeatPolicy
 ) {
 

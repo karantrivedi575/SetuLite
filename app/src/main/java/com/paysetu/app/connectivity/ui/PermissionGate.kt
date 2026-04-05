@@ -1,3 +1,4 @@
+// File: PermissionGate.kt
 package com.paysetu.app.connectivity.ui
 
 import android.Manifest
@@ -37,16 +38,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
-// 💎 SHARED PREMIUM PALETTE
-private val DeepSlateGradient = Brush.verticalGradient(listOf(Color(0xFF0F172A), Color(0xFF020617)))
-private val EmeraldGreen = Color(0xFF10B981)
-private val SoftText = Color.White.copy(alpha = 0.6f)
-
-// 💎 Standardized 0.5dp Depth Modifier
-private fun Modifier.crispPermissionGlass(shape: RoundedCornerShape = RoundedCornerShape(20.dp)) = this
-    .clip(shape)
-    .background(Color.White.copy(alpha = 0.05f))
-    .border(0.5.dp, Color.White.copy(alpha = 0.12f), shape)
+// 💎 IMPORT OUR UNIFIED THEME AND COMPONENTS
+import com.paysetu.app.Core.theme.*
 
 // 💡 1. CRITICAL HELPER: Unwraps the Compose Context to find the true Android Activity
 private fun Context.findActivity(): Activity? {
@@ -245,7 +238,8 @@ private fun PermissionRequestScreen(permissions: Array<String>, onLaunch: () -> 
 @Composable
 private fun PermissionCheckItem(icon: ImageVector, title: String, description: String, isGranted: Boolean) {
     Row(
-        modifier = Modifier.fillMaxWidth().crispPermissionGlass().padding(16.dp),
+        // 💡 Replaced crispPermissionGlass with our centralized glassCard
+        modifier = Modifier.fillMaxWidth().glassCard(RoundedCornerShape(20.dp)).padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(

@@ -1,3 +1,4 @@
+// File: LedgerScreen.kt
 package com.paysetu.app.ledger.ui
 
 import android.content.ClipData
@@ -10,7 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items // 💡 FIXED: This import prevents the 'Int' type mismatch error
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,7 +24,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -41,11 +41,8 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-// 💎 PREMIUM FINTECH PALETTE
-private val DeepSlateGradient = Brush.verticalGradient(listOf(Color(0xFF0F172A), Color(0xFF020617)))
-private val EmeraldGreen = Color(0xFF10B981)
-private val SlateBlue = Color(0xFF94A3B8)
-private val SoftText = Color.White.copy(alpha = 0.7f)
+// 💎 IMPORT OUR UNIFIED THEME AND COMPONENTS
+import com.paysetu.app.Core.theme.*
 
 // Extension for Hex
 fun ByteArray.toHexString(): String = joinToString("") { "%02x".format(it) }
@@ -73,7 +70,7 @@ fun LedgerScreen(
         list.sortedByDescending { it.timestamp }
     }
 
-    // 📅 Group by Humanized Date (Fixed overload conflict)
+    // 📅 Group by Humanized Date
     val groupedTransactions = remember(filteredTransactions) {
         filteredTransactions.groupBy { it.timestamp.toLedgerRelativeDateString() }
     }
@@ -150,7 +147,7 @@ fun LedgerScreen(
                                 selectedTx = tx
                             }) {
                                 // 💡 Triggering grouped mode so it doesn't repeat the date in the row
-                                TransactionItem(transaction = tx)
+                                TransactionItem(transaction = tx, isGroupedMode = true)
                             }
                         }
                     }
@@ -305,7 +302,6 @@ fun AuditField(label: String, value: String, color: Color, isShort: Boolean = fa
     }
 }
 
-// 💡 FIXED: Made private and renamed slightly to prevent ANY external overload conflicts
 private fun Long.toLedgerRelativeDateString(): String {
     val cal = Calendar.getInstance().apply { timeInMillis = this@toLedgerRelativeDateString }
     val today = Calendar.getInstance()

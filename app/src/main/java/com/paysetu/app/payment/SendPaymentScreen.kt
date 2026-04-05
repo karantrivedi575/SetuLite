@@ -20,18 +20,15 @@ import androidx.biometric.BiometricPrompt
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -40,11 +37,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -78,10 +72,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// 💡 NEW: Import from our unified theme! Replaces local palette, glassCard, and shared composables.
+// 💎 IMPORT OUR UNIFIED THEME AND COMPONENTS
 import com.paysetu.app.Core.theme.*
 
-// 🚀 THE FIX: Added TAP_TO_PAY to our Mode Enum
 private enum class SendStep { SCANNER, TAP_TO_PAY, PHONE_ENTRY, AMOUNT_ENTRY }
 
 // 🛡️ NATIVE BIOMETRIC HELPER
@@ -217,7 +210,6 @@ fun SendPaymentScreen(
     val focusManager = LocalFocusManager.current
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
 
-    // We still request these, but we don't block the scanner if they are missing
     val requiredPermissions = mutableListOf<String>()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         requiredPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
@@ -240,12 +232,10 @@ fun SendPaymentScreen(
     var isCameraPrepped by remember { mutableStateOf(false) }
     val amountFocusRequester = remember { FocusRequester() }
 
-    // 🚀 UI catches EventBus to prevent multiple ViewModel instance issues
     LaunchedEffect(Unit) {
         OfflinePaymentEventBus.ackReceived.collect { ackHash ->
             if (ackHash != null) {
                 if (uiState is PaymentUiState.SmsSending || uiState is PaymentUiState.Processing) {
-                    Log.i("PaySetu_UI", "UI directly caught EventBus ACK! Forcing Success State.")
                     viewModel.forceSuccessState(ackHash)
                     OfflinePaymentEventBus.clearAck()
                 }
@@ -255,22 +245,19 @@ fun SendPaymentScreen(
 
     LaunchedEffect(currentStep) {
         if (currentStep == SendStep.SCANNER) {
-            delay(400) // Hardware breath to prevent CameraX crash
+            delay(400)
             isCameraPrepped = true
         } else {
             isCameraPrepped = false
-            // Asynchronous Camera Unbinding prevents the 6-second Main Thread lockup!
             val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
             cameraProviderFuture.addListener({
                 try { cameraProviderFuture.get().unbindAll() } catch (e: Exception) {}
             }, ContextCompat.getMainExecutor(context))
         }
 
-        // 🚀 THE FIX: If user chooses Tap to Pay, trigger the dedicated BLE Logic
         if (currentStep == SendStep.TAP_TO_PAY) {
             if (hardwarePermissionState.allPermissionsGranted) {
                 viewModel.startTapToPayMode { tapId ->
-                    // THUMP! Apple-style heavy haptic feedback
                     val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         vibrator.vibrate(VibrationEffect.createOneShot(100, 255))
@@ -284,7 +271,7 @@ fun SendPaymentScreen(
                 }
             } else {
                 hardwarePermissionState.launchMultiplePermissionRequest()
-                currentStep = SendStep.SCANNER // Kick them back if they don't have permissions
+                currentStep = SendStep.SCANNER
             }
         }
 
@@ -332,21 +319,13 @@ fun SendPaymentScreen(
 
     val handleBackAction = {
         when (uiState) {
-            is PaymentUiState.Processing, is PaymentUiState.SmsSending -> {
-                // Do nothing. Prevent exiting while processing.
-            }
-            is PaymentUiState.Success -> {
-                onBack()
-            }
-            is PaymentUiState.Failure -> {
-                viewModel.reset()
-            }
+            is PaymentUiState.Processing, is PaymentUiState.SmsSending -> { }
+            is PaymentUiState.Success -> onBack()
+            is PaymentUiState.Failure -> viewModel.reset()
             is PaymentUiState.Idle -> {
                 when (currentStep) {
                     SendStep.AMOUNT_ENTRY -> {
-                        // 🛑 THE FIX: Hard reset the radio state if the user backs out
                         viewModel.stopOfflineMode()
-
                         currentStep = if (isSmsFlow) SendStep.PHONE_ENTRY else SendStep.SCANNER
                         amountText = ""
                     }
@@ -367,11 +346,31 @@ fun SendPaymentScreen(
 
         when (val state = uiState) {
 
+            // 💎 USING OUR UNIFIED RECEIPT VIEW
             is PaymentUiState.Success -> {
-                ReceiptView(
-                    amount = state.amount.toString(),
-                    txHash = state.txHash,
-                    isSmsFlow = isSmsFlow,
+                LaunchedEffect(Unit) {
+                    val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        val timings = longArrayOf(0, 50, 100, 50, 150, 200)
+                        val amplitudes = intArrayOf(0, 100, 0, 100, 0, 255)
+                        vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
+                    } else {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    }
+                }
+
+                TransactionReceiptView(
+                    title = "Transfer Successful",
+                    subtitle = "Funds delivered securely.",
+                    amountText = "₢${state.amount}",
+                    details = {
+                        val timeFormat = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()) }
+                        ReceiptRow("Time", timeFormat.format(Date()))
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp), color = Color.White.copy(alpha = 0.1f))
+                        ReceiptRow("TX Hash", state.txHash.take(12).uppercase() + "...")
+                        Spacer(modifier = Modifier.height(12.dp))
+                        ReceiptRow("Method", if (isSmsFlow) "Cellular SMS" else "Offline Node", valueColor = EmeraldGreen)
+                    },
                     onDone = { handleBackAction() }
                 )
             }
@@ -397,26 +396,17 @@ fun SendPaymentScreen(
                     modifier = Modifier.fillMaxSize().padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = { handleBackAction() }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
-                        }
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Text(
-                            text = when (currentStep) {
-                                SendStep.SCANNER -> "Scan PaySetu QR"
-                                SendStep.TAP_TO_PAY -> "Tap to Pay"
-                                SendStep.PHONE_ENTRY -> "Send via SMS"
-                                SendStep.AMOUNT_ENTRY -> "Send Credits"
-                            },
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    }
+
+                    // 🔹 UNIFIED TOP BAR
+                    PaySetuTopBar(
+                        title = when (currentStep) {
+                            SendStep.SCANNER -> "Scan PaySetu QR"
+                            SendStep.TAP_TO_PAY -> "Tap to Pay"
+                            SendStep.PHONE_ENTRY -> "Send via SMS"
+                            SendStep.AMOUNT_ENTRY -> "Send Credits"
+                        },
+                        onBack = { handleBackAction() }
+                    )
 
                     XiaomiGuard(context)
 
@@ -429,16 +419,13 @@ fun SendPaymentScreen(
                                             QrScannerView(
                                                 onCodeScanned = { scannedCode ->
                                                     if (currentStep == SendStep.SCANNER) {
-                                                        haptic.performHapticFeedback(
-                                                            HapticFeedbackType.LongPress
-                                                        )
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                                         scannedReceiverId = scannedCode
                                                         isSmsFlow = false
                                                         currentStep = SendStep.AMOUNT_ENTRY
                                                     }
                                                 },
-                                                modifier = Modifier.fillMaxSize()
-                                                    .clip(RoundedCornerShape(24.dp))
+                                                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp))
                                             )
                                         } else {
                                             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -475,7 +462,6 @@ fun SendPaymentScreen(
 
                                 Spacer(modifier = Modifier.height(24.dp))
 
-                                // 🚀 THE FIX: Mode Switcher Options
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceEvenly
@@ -500,7 +486,6 @@ fun SendPaymentScreen(
                             }
                         }
 
-                        // 🚀 THE FIX: The Tap to Pay Dedicated Radar UI
                         SendStep.TAP_TO_PAY -> {
                             Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Spacer(modifier = Modifier.weight(1f))
@@ -516,7 +501,6 @@ fun SendPaymentScreen(
                                 )
 
                                 Box(contentAlignment = Alignment.Center, modifier = Modifier.size(300.dp)) {
-                                    // Ripple Effect
                                     Box(
                                         modifier = Modifier
                                             .fillMaxSize()
@@ -532,8 +516,6 @@ fun SendPaymentScreen(
                                                 )
                                             }
                                     )
-
-                                    // Center Icon
                                     Box(
                                         modifier = Modifier.size(100.dp).glassCard(CircleShape).background(EmeraldGreen.copy(alpha = 0.2f)),
                                         contentAlignment = Alignment.Center
@@ -634,31 +616,16 @@ fun SendPaymentScreen(
                                 Text("Enter Amount", color = SlateBlue, fontSize = 14.sp)
                                 Spacer(modifier = Modifier.height(16.dp))
 
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("₢", fontSize = 32.sp, color = if(amountText.isEmpty()) Color.White.copy(alpha = 0.2f) else Color.White, fontWeight = FontWeight.Bold)
-                                    Spacer(Modifier.width(8.dp))
-
-                                    BasicTextField(
-                                        value = amountText,
-                                        onValueChange = { newValue ->
-                                            val filtered = newValue.filter { it.isDigit() }
-                                            if (filtered.length <= 6) amountText = filtered
-                                        },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
-                                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                                        textStyle = TextStyle(fontSize = 56.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = if (hasError) RoseError else Color.White, letterSpacing = (-2).sp),
-                                        cursorBrush = SolidColor(EmeraldGreen),
-                                        modifier = Modifier.width(IntrinsicSize.Min).defaultMinSize(minWidth = 50.dp).focusRequester(amountFocusRequester),
-                                        decorationBox = { innerTextField ->
-                                            Box {
-                                                if (amountText.isEmpty()) {
-                                                    Text("0", fontSize = 56.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = Color.White.copy(alpha = 0.2f), letterSpacing = (-2).sp)
-                                                }
-                                                innerTextField()
-                                            }
-                                        }
-                                    )
-                                }
+                                // 💰 UNIFIED AMOUNT INPUT
+                                AmountInputPad(
+                                    amountText = amountText,
+                                    onAmountChange = { amountText = it },
+                                    symbol = "₢",
+                                    hasError = hasError,
+                                    maxLength = 6,
+                                    focusRequester = amountFocusRequester,
+                                    onDone = { focusManager.clearFocus() }
+                                )
 
                                 val helperText = when {
                                     isOverdraft -> "Insufficient credits. Available: ₢$totalBalance"
@@ -717,97 +684,6 @@ fun SendPaymentScreen(
                 }
             }
         }
-    }
-}
-
-// -------------------------------------------------------------
-// 🚀 THE FIX: Modern Glassmorphism Receipt View
-// -------------------------------------------------------------
-
-@Composable
-fun ReceiptView(
-    amount: String,
-    txHash: String,
-    isSmsFlow: Boolean,
-    onDone: () -> Unit
-) {
-    val context = LocalContext.current
-    val haptic = LocalHapticFeedback.current
-
-    LaunchedEffect(Unit) {
-        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val timings = longArrayOf(0, 50, 100, 50, 150, 200)
-            val amplitudes = intArrayOf(0, 100, 0, 100, 0, 255)
-            vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
-        } else {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        }
-    }
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxSize().padding(24.dp)
-    ) {
-        // Top Spacer vertically centers the ticket content
-        Spacer(modifier = Modifier.weight(1f))
-
-        // Large Success Icon
-        Box(
-            modifier = Modifier.size(88.dp).glassCard(CircleShape).background(EmeraldGreen.copy(alpha = 0.2f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(Icons.Default.Check, contentDescription = "Success", tint = EmeraldGreen, modifier = Modifier.size(44.dp))
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-        Text("Transfer Successful", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 28.sp)
-        Text("Funds delivered securely.", color = EmeraldGreen, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-        Spacer(modifier = Modifier.height(40.dp))
-
-        // Modern Glass Ticket Container
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .glassCard(RoundedCornerShape(20.dp))
-                .background(Color.White.copy(alpha = 0.03f))
-        ) {
-            Column(modifier = Modifier.padding(24.dp)) {
-                ReceiptRow("Amount Sent", "₢$amount", isBold = true, valueColor = EmeraldGreen, valueSize = 24.sp)
-            }
-
-            // Elegant Dashed Line Separator
-            Canvas(Modifier.fillMaxWidth().height(1.dp)) {
-                drawLine(
-                    color = Color.White.copy(alpha = 0.2f),
-                    start = Offset(0f, 0f),
-                    end = Offset(size.width, 0f),
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 15f), 0f)
-                )
-            }
-
-            Column(modifier = Modifier.padding(24.dp)) {
-                val timeFormat = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()) }
-                ReceiptRow("Time", timeFormat.format(Date()))
-                Spacer(modifier = Modifier.height(16.dp))
-                ReceiptRow("TX Hash", txHash.take(12).uppercase() + "...")
-                Spacer(modifier = Modifier.height(16.dp))
-                ReceiptRow("Method", if (isSmsFlow) "Cellular SMS" else "Offline Node", valueColor = EmeraldGreen)
-            }
-        }
-
-        // Bottom Spacer pushes the Done button flush to the bottom
-        Spacer(modifier = Modifier.weight(1.5f))
-
-        Button(
-            onClick = onDone,
-            modifier = Modifier.fillMaxWidth().height(60.dp),
-            shape = RoundedCornerShape(20.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
-        ) {
-            Text("Done", fontSize = 18.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
-        }
-        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 

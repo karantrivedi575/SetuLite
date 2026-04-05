@@ -1,8 +1,62 @@
+// File: DeviceState.kt
 package com.paysetu.app.Core.device
 
-import com.paysetu.app.Core.device.DeviceStateDao
-import com.paysetu.app.Core.device.DeviceStateEntity
+import androidx.room.Dao
+import androidx.room.Entity
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.PrimaryKey
+import androidx.room.Query
 
+// ==========================================
+// 1. The Entity (Data Structure)
+// ==========================================
+@Entity(tableName = "device_state")
+data class DeviceStateEntity(
+    @PrimaryKey
+    val id: Int = 0,
+    val lastKnownChainHash: ByteArray,
+    val lastSuccessfulSync: Long,
+    val trustScore: Int
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as DeviceStateEntity
+
+        if (id != other.id) return false
+        if (lastSuccessfulSync != other.lastSuccessfulSync) return false
+        if (trustScore != other.trustScore) return false
+        if (!lastKnownChainHash.contentEquals(other.lastKnownChainHash)) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = id
+        result = 31 * result + lastSuccessfulSync.hashCode()
+        result = 31 * result + trustScore
+        result = 31 * result + lastKnownChainHash.contentHashCode()
+        return result
+    }
+}
+
+// ==========================================
+// 2. The DAO (Database Access)
+// ==========================================
+@Dao
+interface DeviceStateDao {
+    @Query("SELECT * FROM device_state WHERE id = 0 LIMIT 1")
+    suspend fun getDeviceState(): DeviceStateEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdate(state: DeviceStateEntity)
+}
+
+// ==========================================
+// 3. The Repository (Business Abstraction)
+// ==========================================
 class DeviceStateRepository(
     private val deviceStateDao: DeviceStateDao
 ) {

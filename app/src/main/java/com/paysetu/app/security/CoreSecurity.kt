@@ -1,26 +1,40 @@
+// File: CoreSecurity.kt
 package com.paysetu.app.security
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Debug
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import java.io.File
 import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
+
+// ==========================================
+// 1. SECURITY INTERFACES
+// ==========================================
 
 interface KeyProvider {
     fun getDevicePublicKey(): ByteArray
 }
 
-/**
- * Interface for Phase 10 digital signatures.
- */
 interface TransactionSigner {
     fun sign(payloadHash: ByteArray): ByteArray
 }
+
+interface DeviceIntegrityChecker {
+    fun isDeviceTrusted(): Boolean
+}
+
+// ==========================================
+// 2. KEY MANAGER (Hardware ECDSA & Keystore)
+// ==========================================
 
 /**
  * Unified Security Engine.
@@ -127,5 +141,98 @@ class KeyManager(private val context: Context) : KeyProvider, TransactionSigner 
                 context.packageManager.hasSystemFeature(
                     PackageManager.FEATURE_STRONGBOX_KEYSTORE
                 )
+    }
+}
+
+// ==========================================
+// 3. DEVICE INTEGRITY (Root & Tamper Checks)
+// ==========================================
+
+class DeviceIntegrityCheckerImpl(
+    private val context: Context
+) : DeviceIntegrityChecker {
+
+    override fun isDeviceTrusted(): Boolean {
+        return !isRooted() && !isEmulator() && !isDebuggable()
+    }
+
+    private fun isRooted(): Boolean {
+        // Check for test-keys which indicate a custom ROM or non-production build
+        val buildTags = Build.TAGS
+        if (buildTags != null && buildTags.contains("test-keys")) {
+            return true
+        }
+
+        // Comprehensive list of common su binary paths
+        val paths = arrayOf(
+            "/system/app/Superuser.apk",
+            "/sbin/su",
+            "/system/bin/su",
+            "/system/xbin/su",
+            "/data/local/xbin/su",
+            "/data/local/bin/su",
+            "/system/sd/xbin/su",
+            "/system/bin/failsafe/su",
+            "/data/local/su",
+            "/su/bin/su",
+            "/magisk/.core/bin/su"
+        )
+        if (paths.any { File(it).exists() }) {
+            return true
+        }
+
+        // Check if su is executable via runtime
+        var process: Process? = null
+        return try {
+            process = Runtime.getRuntime().exec(arrayOf("/system/xbin/which", "su"))
+            val inReader = process.inputStream.bufferedReader()
+            inReader.readLine() != null
+        } catch (t: Throwable) {
+            false
+        } finally {
+            process?.destroy()
+        }
+    }
+
+    private fun isEmulator(): Boolean {
+        return (Build.FINGERPRINT.startsWith("generic")
+                || Build.FINGERPRINT.startsWith("unknown")
+                || Build.MODEL.contains("google_sdk")
+                || Build.MODEL.contains("Emulator")
+                || Build.MODEL.contains("Android SDK built for x86")
+                || Build.MANUFACTURER.contains("Genymotion")
+                || (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
+                || "google_sdk" == Build.PRODUCT
+                || Build.HARDWARE.contains("goldfish")
+                || Build.HARDWARE.contains("ranchu"))
+    }
+
+    private fun isDebuggable(): Boolean {
+        val isAppDebuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        val isDebuggerAttached = Debug.isDebuggerConnected() || Debug.waitingForDebugger()
+        return isAppDebuggable || isDebuggerAttached
+    }
+}
+
+// ==========================================
+// 4. GENESIS HASH PROVIDER (Ledger Bootstrapping)
+// ==========================================
+
+class GenesisHashProvider(
+    private val keyProvider: KeyProvider
+) {
+
+    // 🔒 Backing field renamed to avoid JVM clash
+    private val cachedGenesisHash: ByteArray by lazy {
+        val publicKey = keyProvider.getDevicePublicKey()
+
+        MessageDigest
+            .getInstance("SHA-256")
+            .digest(publicKey)
+    }
+
+    fun getGenesisHash(): ByteArray {
+        // Defensive copy to preserve immutability
+        return cachedGenesisHash.clone()
     }
 }

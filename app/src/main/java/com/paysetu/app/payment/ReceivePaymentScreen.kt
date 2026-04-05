@@ -15,8 +15,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -41,7 +39,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// 💡 NEW: Import from our unified theme! This replaces all local colors, gradients, and modifiers.
+// 💎 IMPORT OUR UNIFIED THEME AND COMPONENTS
 import com.paysetu.app.Core.theme.*
 
 @Composable
@@ -77,24 +75,15 @@ fun ReceivePaymentScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
 
-            // 🔹 Custom Top Bar
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = {
-                        viewModel.stopOfflineMode()
-                        viewModel.reset() // 💡 Clean state
-                        onReject()
-                    },
-                    modifier = Modifier.size(24.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+            // 🔹 UNIFIED TOP BAR
+            PaySetuTopBar(
+                title = "Receive Credits",
+                onBack = {
+                    viewModel.stopOfflineMode()
+                    viewModel.reset() // 💡 Clean state
+                    onReject()
                 }
-                Spacer(modifier = Modifier.width(16.dp))
-                Text("Receive Credits", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Color.White)
-            }
+            )
 
             Column(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -104,7 +93,6 @@ fun ReceivePaymentScreen(
                 when (val state = uiState) {
                     is PaymentUiState.Idle -> {
                         if (qrBitmap != null) {
-
                             // 💎 BRANDED QR CONTAINER
                             Box(contentAlignment = Alignment.Center) {
                                 // Background Glow
@@ -124,7 +112,6 @@ fun ReceivePaymentScreen(
                                     tonalElevation = 8.dp
                                 ) {
                                     Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(16.dp)) {
-
                                         // The Actual QR Code
                                         Image(
                                             bitmap = qrBitmap.asImageBitmap(),
@@ -195,7 +182,6 @@ fun ReceivePaymentScreen(
                                 }
                                 QuickActionButton(Icons.Default.Share, "Share") {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    // Standard Android Share Intent logic would go here
                                     Toast.makeText(context, "Share sheet opening...", Toast.LENGTH_SHORT).show()
                                 }
                             }
@@ -218,7 +204,7 @@ fun ReceivePaymentScreen(
                         }
                     }
 
-                    // 💡 REPLACED: Using our centralized ProcessingView!
+                    // 💡 USING OUR CENTRALIZED PROCESSING VIEW
                     is PaymentUiState.Processing -> {
                         ProcessingView(
                             title = "Verifying Transaction...",
@@ -226,71 +212,29 @@ fun ReceivePaymentScreen(
                         )
                     }
 
+                    // 💡 USING OUR CENTRALIZED RECEIPT VIEW
                     is PaymentUiState.Success -> {
-                        // 💡 HAPTIC SUCCESS THUD
                         LaunchedEffect(Unit) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         }
 
-                        // 💎 Glass Success Icon
-                        Box(
-                            modifier = Modifier
-                                .size(100.dp)
-                                .glassCard(CircleShape)
-                                .background(EmeraldGreen.copy(alpha = 0.2f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.Check,
-                                contentDescription = "Success",
-                                tint = EmeraldGreen,
-                                modifier = Modifier.size(50.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-                        Text("Payment Received!", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp)
-                        Text("Funds verified and added to ledger.", color = EmeraldGreen, fontSize = 14.sp)
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        // 💡 AMOUNT TYPOGRAPHY (Bold Emerald)
-                        Text(
-                            text = "+₢${state.amount ?: "0"}",
-                            style = MaterialTheme.typography.displayMedium,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace,
-                            color = EmeraldGreen
-                        )
-
-                        Spacer(modifier = Modifier.height(32.dp))
-
-                        Column(modifier = Modifier.fillMaxWidth().glassCard().padding(24.dp)) {
-                            val timeFormat = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
-
-                            // 💡 REPLACED: Using our centralized ReceiptRow!
-                            ReceiptRow("Time Received", timeFormat.format(Date()))
-
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp), color = Color.White.copy(alpha = 0.1f))
-
-                            ReceiptRow("TX Hash", state.txHash.take(12).uppercase() + "...")
-                            Spacer(modifier = Modifier.height(12.dp))
-                            ReceiptRow("Status", "Verified Offline", valueColor = EmeraldGreen)
-                        }
-
-                        Spacer(modifier = Modifier.weight(1f))
-
-                        Button(
-                            onClick = {
+                        TransactionReceiptView(
+                            title = "Payment Received!",
+                            subtitle = "Funds verified and added to ledger.",
+                            amountText = "+₢${state.amount ?: "0"}",
+                            details = {
+                                val timeFormat = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()) }
+                                ReceiptRow("Time Received", timeFormat.format(Date()))
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp), color = Color.White.copy(alpha = 0.1f))
+                                ReceiptRow("TX Hash", state.txHash.take(12).uppercase() + "...")
+                                Spacer(modifier = Modifier.height(12.dp))
+                                ReceiptRow("Status", "Verified Offline", valueColor = EmeraldGreen)
+                            },
+                            onDone = {
                                 viewModel.reset() // 💡 Clean state so we don't get stuck!
                                 onAccept()
-                            },
-                            modifier = Modifier.fillMaxWidth().height(56.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
-                        ) {
-                            Text("Done", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        }
+                            }
+                        )
                     }
 
                     is PaymentUiState.Failure -> {
@@ -337,7 +281,7 @@ fun ReceivePaymentScreen(
     }
 }
 
-// 💡 SHARED UI HELPERS
+// 💡 SHARED UI HELPERS (Specific to Receive Screen)
 @Composable
 private fun QuickActionButton(icon: ImageVector, label: String, onClick: () -> Unit) {
     Column(
